@@ -47,8 +47,18 @@ select {
   background: rgba(255, 252, 247, 0.92);
 }
 
+input.checkbox {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+}
+
 #app {
   min-height: 100vh;
+}
+
+.hidden-input {
+  display: none;
 }
 
 .app-shell {
@@ -116,6 +126,21 @@ select {
   border-radius: 24px;
   background: rgba(255, 251, 246, 0.92);
   box-shadow: 0 18px 45px rgba(91, 60, 43, 0.08);
+}
+
+.nested-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.95rem;
+  border-radius: 16px;
+  border: 1px solid rgba(36, 29, 24, 0.12);
+  background: rgba(255, 247, 239, 0.75);
+}
+
+.nested-card h3 {
+  margin: 0;
+  font-size: 1rem;
 }
 
 .draft-list {

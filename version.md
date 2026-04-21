@@ -1,106 +1,82 @@
-# RolePlayCard 0.0.1 版本日志
+# RolePlayCard 版本日志
 
-发布日期：2026-04-21
+## 0.0.2（2026-04-21）
 
-## 一、框架与技术栈
+### 架构调整
+- 移除 Electron 桌面壳，项目改为纯 Web 形态（Vue + Flask API）。
+- 前端通过 HTTP 调用后端，不再依赖 preload/IPC bridge。
+- 开发脚本改为并行启动：
+  - `npm run dev:web`（Vite）
+  - `npm run dev:api`（Flask）
 
-### 1) 桌面端与前端
-- Electron `^35.1.4`（桌面应用容器）
-- Vue `^3.5.13`（界面框架）
-- Vite `^6.2.3`（前端构建与开发服务器）
-- TypeScript `^5.8.2`（类型系统）
+### 数据与功能升级
+- 「姓名栏」升级为「角色卡」结构，支持一个卡内多个角色。
+- 世界书改为条目化结构（entries），支持手动增删条目。
+- 角色条目与世界书条目均支持蓝灯/绿灯触发模式：
+  - 蓝灯：常驻触发（always）
+  - 绿灯：关键词触发（keyword）
+- 新增高级参数：
+  - 触发顺序（insertion order）
+  - 触发概率（probability）
+  - 插入位置（position）
+  - 深度（depth）
 
-### 2) 后端服务
-- Python（本地服务运行时）
-- Flask `3.1.0`（HTTP API）
-- Pillow `11.1.0`（图像处理与 PNG 元数据写入）
+### 导入导出
+- 导入：
+  - 支持上传 PNG/JSON 角色卡文件导入。
+  - 支持从卡内元数据恢复草稿与世界书条目。
+- 导出：
+  - 后端生成 Tavern 兼容 PNG 并回传 base64，前端直接下载。
+  - 导出时写入 `chara` 与 `roleplaycard` 元数据。
 
-### 3) 开发与工程工具
-- concurrently `^9.1.2`（并行启动多进程）
-- wait-on `^8.0.3`（等待端口/构建产物就绪）
-- cross-env `^7.0.3`（跨平台环境变量）
-- pytest `8.3.5`（Python 测试）
+### 设置持久化
+- 设置改为浏览器 Cookie 存储（不再使用本地桌面配置文件）。
+- Provider 配置在前端读取/保存，调用接口时随请求发送。
 
-## 二、功能清单
+### API（Web）
+- `GET /api/health`
+- `GET /api/settings`
+- `POST /api/settings`
+- `POST /api/settings/test`
+- `GET /api/drafts`
+- `GET /api/drafts/<draft_id>`
+- `POST /api/drafts`
+- `POST /api/ai/field`
+- `POST /api/ai/image-prompt`
+- `POST /api/ai/image`
+- `POST /api/files/upload-image`
+- `GET /api/files/image`
+- `POST /api/card/import-file`
+- `POST /api/card/export-download`
 
-### 1) 角色卡编辑器（Vue + Electron）
-- 角色描述字段编辑：
-  - `profile.name` / `profile.age` / `profile.gender`
-  - `profile.appearance` / `profile.personality` / `profile.speakingStyle` / `profile.background`
-- 首屏信息字段编辑：
-  - `opening.greeting` / `opening.scenario` / `opening.exampleDialogue` / `opening.firstMessage`
-- 世界书编辑：`worldBook`
-- 插图信息编辑：
-  - `illustration.stylePrompt` / `illustration.promptSnapshot` / `illustration.negativePrompt`
+## 0.0.2 修复补丁（2026-04-21）
 
-### 2) 草稿管理
-- 新建草稿（自动生成 `id`、时间戳）
-- 草稿列表展示（按更新时间排序）
-- 打开草稿
-- 保存草稿
-- 另存为草稿（生成新 `id`）
-- 自动保存（字段变更后延迟触发）
+### 导入兼容性修复
+- 修复部分角色卡无法读取世界书条目的问题。
+- 导入解析增强，支持：
+  - `chara` / `ccv3` / `roleplaycard` 元数据来源
+  - `chara_card_v2` 与 `chara_card_v3`
+  - `character_book.entries` 为 `list` 或 `dict`
+  - 多种字段别名（keys/key/keywords，content/text/value/entry）
 
-### 3) AI 文本能力
-- 字段级 AI 生成（`generate`）
-- 字段级 AI 改写（`rewrite`）
-- 自动拼接上下文（角色设定 + 首屏信息 + 世界书摘要）
-- 输出清洗（移除多余标记，返回可直接粘贴内容）
+### 图片预览修复
+- 修复预览错误 URL（错误使用 `file:///api/...`）导致 broken image。
+- 改为 HTTP 预览（`/api/files/image?path=...`）。
+- 导入后强制刷新预览参数，避免缓存导致不更新。
+- 导入时清空 `generatedImagePath`，避免覆盖 `originalImagePath`。
 
-### 4) AI 图像能力
-- 本地图片上传并预览
-- 自动生成绘图提示词（Prompt + Negative Prompt）
-- 文生图生成角色插图
-- 生成图写入本地缓存目录并回填到草稿
+### 前端稳定性修复
+- 修复 `structuredClone` 克隆 Vue 响应式对象触发 `DataCloneError`。
+- 统一改为 plain object 深拷贝后再发送请求（JSON 序列化路径）。
 
-### 5) Provider 配置与连通性
-- 文本 Provider：`mock` / `openai_compatible`
-- 图像 Provider：`mock` / `openai_compatible`
-- 可配置项：
-  - `baseUrl` / `apiKey` / `model` / `timeoutMs` / `temperature`
-- 配置连通性测试（文本与图像分别校验）
+### 测试
+- Python 测试覆盖扩展至：
+  - 保存/读取草稿
+  - 导出元数据校验
+  - v2/v3 卡导入
+  - `ccv3` 回退导入
 
-### 6) TavernAI 角色卡导出
-- 导出前校验：
-  - 必填角色名
-  - 必填首条消息
-  - 必选导出图片
-- 自动将输入图像转换为 PNG
-- 向 PNG 写入 Tavern 兼容元数据：
-  - `chara`（Base64 JSON）
-  - `roleplaycard`（完整草稿 JSON）
-- 导出目标路径由系统保存对话框选择
+## 0.0.1（2026-04-21）
 
-### 7) 本地数据存储
-- `settings.json`：应用配置
-- `drafts/*.json`：角色草稿
-- `cache/images/*`：生成图缓存
-- `logs/*`：日志目录占位
-
-### 8) IPC 与后端 API
-- Electron IPC：
-  - `app.info`
-  - `settings.get` / `settings.set` / `settings.test`
-  - `draft.list` / `draft.load` / `draft.save` / `draft.saveAs`
-  - `ai.generateField` / `ai.generateImagePrompt` / `ai.generateImage`
-  - `card.export`
-  - `files.pickImage` / `files.pickExportPath`
-- Flask API：
-  - `GET /health`
-  - `GET /settings`
-  - `POST /settings`
-  - `POST /settings/test`
-  - `GET /drafts`
-  - `GET /drafts/<draft_id>`
-  - `POST /drafts`
-  - `POST /ai/field`
-  - `POST /ai/image-prompt`
-  - `POST /ai/image`
-  - `POST /card/export`
-
-### 9) 测试覆盖（当前）
-- 草稿保存与读取测试
-- 导出 PNG 元数据写入与可读性测试
-
-## 三、0.0.1 目标总结
-- 完成“本地桌面编辑 + AI 辅助生成 + TavernAI PNG 导出”的首个可用闭环版本。
+- 首个可用版本：Electron + Vue + Python。
+- 支持角色卡编辑、AI 字段生成、AI 图像生成、Tavern PNG 导出。

@@ -1,5 +1,16 @@
 export type ProviderKind = 'mock' | 'openai_compatible';
 
+export type EntryTriggerMode = 'always' | 'keyword';
+
+export type WorldBookInsertionPosition =
+  | 'before_char'
+  | 'after_char'
+  | 'before_example'
+  | 'after_example'
+  | 'top_an'
+  | 'bottom_an'
+  | 'at_depth';
+
 export interface ProviderConfig {
   provider: ProviderKind;
   baseUrl: string;
@@ -18,14 +29,41 @@ export interface AppSettings {
   recentDirectory: string;
 }
 
-export interface CharacterProfile {
+export interface WorldBookAdvancedOptions {
+  insertionOrder: number;
+  triggerProbability: number;
+  insertionPosition: WorldBookInsertionPosition;
+  depth: number;
+}
+
+export interface CharacterDefinition {
+  id: string;
+  enabled: boolean;
+  triggerMode: EntryTriggerMode;
   name: string;
+  triggerKeywords: string[];
   age: string;
-  gender: string;
   appearance: string;
   personality: string;
   speakingStyle: string;
+  speakingExample: string;
   background: string;
+  advanced: WorldBookAdvancedOptions;
+}
+
+export interface WorldBookEntry {
+  id: string;
+  enabled: boolean;
+  triggerMode: EntryTriggerMode;
+  title: string;
+  keywords: string[];
+  content: string;
+  advanced: WorldBookAdvancedOptions;
+}
+
+export interface CardMeta {
+  name: string;
+  description: string;
 }
 
 export interface OpeningInfo {
@@ -49,9 +87,12 @@ export interface CharacterDraft {
   version: number;
   createdAt: string;
   updatedAt: string;
-  profile: CharacterProfile;
+  card: CardMeta;
+  characters: CharacterDefinition[];
   opening: OpeningInfo;
-  worldBook: string;
+  worldBook: {
+    entries: WorldBookEntry[];
+  };
   illustration: IllustrationInfo;
 }
 
@@ -73,6 +114,7 @@ export interface GenerateFieldRequest {
   mode: 'generate' | 'rewrite';
   draft: CharacterDraft;
   userInput: string;
+  settings?: AppSettings;
 }
 
 export interface GenerateFieldResponse {
@@ -90,6 +132,7 @@ export interface GenerateImageRequest {
   draft: CharacterDraft;
   prompt: string;
   negativePrompt: string;
+  settings?: AppSettings;
 }
 
 export interface GenerateImageResponse {
@@ -100,7 +143,24 @@ export interface GenerateImageResponse {
 export interface ExportCharacterCardRequest {
   draft: CharacterDraft;
   imagePath: string;
-  outputPath: string;
+}
+
+export interface ExportCharacterCardResponse {
+  filename: string;
+  imageBase64: string;
+}
+
+export interface ImportCharacterCardRequest {
+  inputPath: string;
+}
+
+export interface ImportCharacterCardResponse {
+  draft: CharacterDraft;
+  sourcePath: string;
+}
+
+export interface UploadImageResponse {
+  path: string;
 }
 
 export interface ProviderValidationResult {

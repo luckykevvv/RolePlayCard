@@ -2,13 +2,128 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import type {
   AppSettings,
+  CharacterDefinition,
   CharacterDraft,
   DraftSummary,
+  ExportCharacterCardResponse,
   GenerateFieldRequest,
   ProviderConfig,
+  TaskResult,
+  UploadImageResponse,
+  WorldBookAdvancedOptions,
+  WorldBookEntry,
 } from '../../shared/types.js';
 
+const API_BASE = '/api';
+const SETTINGS_COOKIE_KEY = 'roleplaycard_settings';
+
+function buildDefaultSettings(): AppSettings {
+  return {
+    textProvider: createProviderConfig(),
+    imageProvider: createProviderConfig(),
+    exportDirectory: '',
+    recentDirectory: '',
+  };
+}
+
+function clonePlain<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function mergeSettings(defaults: AppSettings, incoming: Partial<AppSettings> | null): AppSettings {
+  if (!incoming) return defaults;
+  return {
+    ...defaults,
+    ...incoming,
+    textProvider: { ...defaults.textProvider, ...(incoming.textProvider ?? {}) },
+    imageProvider: { ...defaults.imageProvider, ...(incoming.imageProvider ?? {}) },
+  };
+}
+
+function getCookieValue(name: string): string | null {
+  const encoded = `${encodeURIComponent(name)}=`;
+  const parts = document.cookie.split(';');
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(encoded)) {
+      return decodeURIComponent(trimmed.slice(encoded.length));
+    }
+  }
+  return null;
+}
+
+function setCookieValue(name: string, value: string, days = 365) {
+  const maxAge = days * 24 * 60 * 60;
+  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+}
+
+function loadSettingsFromCookie(): AppSettings {
+  const defaults = buildDefaultSettings();
+  const raw = getCookieValue(SETTINGS_COOKIE_KEY);
+  if (!raw) return defaults;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AppSettings>;
+    return mergeSettings(defaults, parsed);
+  } catch {
+    return defaults;
+  }
+}
+
+async function apiRequest<T>(path: string, init?: RequestInit): Promise<TaskResult<T>> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(init?.headers ?? {}),
+    },
+  });
+  let payload: TaskResult<T> | null = null;
+  try {
+    payload = (await response.json()) as TaskResult<T>;
+  } catch {
+    payload = null;
+  }
+  if (payload) return payload;
+  return {
+    success: false,
+    error_code: 'invalid_response',
+    message: `HTTP ${response.status}`,
+    data: null,
+  };
+}
+
+function imageSrcFromPath(pathValue: string, seed: number): string {
+  if (!pathValue) return '';
+  if (pathValue.startsWith('data:') || pathValue.startsWith('blob:') || pathValue.startsWith('http')) {
+    return pathValue;
+  }
+  return `${API_BASE}/files/image?path=${encodeURIComponent(pathValue)}&t=${seed}`;
+}
+
+function downloadBase64Png(filename: string, imageBase64: string) {
+  const binary = atob(imageBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const blob = new Blob([bytes], { type: 'image/png' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 const nowIso = () => new Date().toISOString();
+const splitKeywords = (text: string) =>
+  text
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
 const createProviderConfig = (): ProviderConfig => ({
   provider: 'mock',
   baseUrl: 'https://api.openai.com/v1',
@@ -19,27 +134,57 @@ const createProviderConfig = (): ProviderConfig => ({
   enabled: true,
 });
 
+const createAdvanced = (): WorldBookAdvancedOptions => ({
+  insertionOrder: 200,
+  triggerProbability: 100,
+  insertionPosition: 'after_char',
+  depth: 4,
+});
+
+const createCharacter = (): CharacterDefinition => ({
+  id: crypto.randomUUID(),
+  enabled: true,
+  triggerMode: 'keyword',
+  name: '',
+  triggerKeywords: [],
+  age: '',
+  appearance: '',
+  personality: '',
+  speakingStyle: '',
+  speakingExample: '',
+  background: '',
+  advanced: createAdvanced(),
+});
+
+const createWorldEntry = (): WorldBookEntry => ({
+  id: crypto.randomUUID(),
+  enabled: true,
+  triggerMode: 'keyword',
+  title: '',
+  keywords: [],
+  content: '',
+  advanced: createAdvanced(),
+});
+
 const createDraft = (): CharacterDraft => ({
   id: crypto.randomUUID(),
-  version: 1,
+  version: 2,
   createdAt: nowIso(),
   updatedAt: nowIso(),
-  profile: {
+  card: {
     name: '',
-    age: '',
-    gender: '',
-    appearance: '',
-    personality: '',
-    speakingStyle: '',
-    background: '',
+    description: '',
   },
+  characters: [createCharacter()],
   opening: {
     greeting: '',
     scenario: '',
     exampleDialogue: '',
     firstMessage: '',
   },
-  worldBook: '',
+  worldBook: {
+    entries: [],
+  },
   illustration: {
     originalImagePath: '',
     generatedImagePath: '',
@@ -63,15 +208,25 @@ const activeView = ref<'editor' | 'settings'>('editor');
 const status = ref('准备就绪');
 const appDataDir = ref('');
 const aiBusyField = ref('');
+const importInputRef = ref<HTMLInputElement | null>(null);
+const imageInputRef = ref<HTMLInputElement | null>(null);
+const previewSeed = ref(Date.now());
 const imagePreview = computed(
-  () => draft.illustration.generatedImagePath || draft.illustration.originalImagePath || '',
+  () =>
+    imageSrcFromPath(
+      draft.illustration.generatedImagePath || draft.illustration.originalImagePath || '',
+      previewSeed.value,
+    ),
+);
+const effectiveCardName = computed(
+  () => draft.card.name.trim() || draft.characters[0]?.name.trim() || '',
 );
 const exportReady = computed(
-  () => Boolean(draft.profile.name.trim() && draft.opening.firstMessage.trim() && imagePreview.value),
+  () => Boolean(effectiveCardName.value && draft.opening.firstMessage.trim() && imagePreview.value),
 );
 const validationReport = computed(() => {
   const items: string[] = [];
-  if (!draft.profile.name.trim()) items.push('缺少角色姓名');
+  if (!effectiveCardName.value) items.push('缺少角色卡名称（或至少一个角色名称）');
   if (!draft.opening.firstMessage.trim()) items.push('缺少首条消息');
   if (!imagePreview.value) items.push('缺少导出图片');
   return items;
@@ -80,28 +235,27 @@ const validationReport = computed(() => {
 let autosaveTimer: number | null = null;
 
 async function refreshDraftList() {
-  const result = await window.rolePlayCard.listDrafts();
+  const result = await apiRequest<DraftSummary[]>('/drafts');
   if (result.success && result.data) {
     drafts.value = result.data;
   }
 }
 
 async function loadSettings() {
-  const result = await window.rolePlayCard.getSettings();
-  if (result.success && result.data) {
-    Object.assign(settings, result.data);
-  }
+  Object.assign(settings, loadSettingsFromCookie());
 }
 
 async function saveSettings() {
-  status.value = '正在保存设置...';
-  const result = await window.rolePlayCard.saveSettings(structuredClone(settings));
-  status.value = result.success ? '设置已保存' : `设置保存失败: ${result.message}`;
+  setCookieValue(SETTINGS_COOKIE_KEY, JSON.stringify(clonePlain(settings)));
+  status.value = '设置已保存到浏览器 Cookie';
 }
 
 async function testSettings() {
   status.value = '正在测试 Provider 配置...';
-  const result = await window.rolePlayCard.testSettings();
+  const result = await apiRequest<Array<{ provider: string; ok: boolean; detail: string }>>('/settings/test', {
+    method: 'POST',
+    body: JSON.stringify({ settings: clonePlain(settings) }),
+  });
   if (!result.success || !result.data) {
     status.value = `测试失败: ${result.message}`;
     return;
@@ -110,21 +264,22 @@ async function testSettings() {
 }
 
 async function openDraft(draftId: string) {
-  const result = await window.rolePlayCard.loadDraft(draftId);
+  const result = await apiRequest<CharacterDraft>(`/drafts/${encodeURIComponent(draftId)}`);
   if (!result.success || !result.data) {
     status.value = `打开草稿失败: ${result.message}`;
     return;
   }
   Object.assign(draft, result.data);
-  status.value = `已打开草稿 ${result.data.profile.name || result.data.id}`;
+  status.value = `已打开草稿 ${result.data.card.name || result.data.id}`;
 }
 
 async function saveDraft(saveAs = false) {
   draft.updatedAt = nowIso();
-  const request = structuredClone(draft);
-  const result = saveAs
-    ? await window.rolePlayCard.saveDraftAs(request)
-    : await window.rolePlayCard.saveDraft(request);
+  const request = clonePlain(draft);
+  const result = await apiRequest<CharacterDraft>('/drafts', {
+    method: 'POST',
+    body: JSON.stringify({ draft: request, saveAs }),
+  });
   if (!result.success || !result.data) {
     status.value = `保存草稿失败: ${result.message}`;
     return;
@@ -143,67 +298,147 @@ function queueAutosave() {
   }, 1200);
 }
 
-function resolveFieldValue(field: string) {
-  const [section, key] = field.split('.');
-  if (section === 'profile') {
-    return draft.profile[key as keyof CharacterDraft['profile']] ?? '';
-  }
-  if (section === 'opening') {
-    return draft.opening[key as keyof CharacterDraft['opening']] ?? '';
-  }
-  if (section === 'illustration') {
-    return draft.illustration[key as keyof CharacterDraft['illustration']] ?? '';
-  }
-  return '';
-}
-
-function applyFieldValue(field: string, value: string) {
-  const [section, key] = field.split('.');
-  if (section === 'profile') {
-    draft.profile[key as keyof CharacterDraft['profile']] = value;
-    return;
-  }
-  if (section === 'opening') {
-    draft.opening[key as keyof CharacterDraft['opening']] = value;
-    return;
-  }
-  if (section === 'illustration') {
-    draft.illustration[key as keyof CharacterDraft['illustration']] = value;
-  }
-}
-
-async function runFieldAI(field: string, mode: GenerateFieldRequest['mode']) {
+async function runFieldAI(
+  field: string,
+  mode: GenerateFieldRequest['mode'],
+  currentValue: string,
+  apply: (value: string) => void,
+) {
   aiBusyField.value = field;
   status.value = `正在为 ${field} 生成内容...`;
-  const result = await window.rolePlayCard.generateField({
-    field,
-    mode,
-    userInput: resolveFieldValue(field),
-    draft: structuredClone(draft),
+  const result = await apiRequest<{ field: string; result: string; promptPreview: string }>('/ai/field', {
+    method: 'POST',
+    body: JSON.stringify({
+      field,
+      mode,
+      userInput: currentValue,
+      draft: clonePlain(draft),
+      settings: clonePlain(settings),
+    }),
   });
   aiBusyField.value = '';
   if (!result.success || !result.data) {
     status.value = `AI 生成失败: ${result.message}`;
     return;
   }
-  applyFieldValue(field, result.data.result);
+  apply(result.data.result);
   status.value = `${field} 已更新`;
 }
 
-async function pickImage() {
-  const result = await window.rolePlayCard.pickImage();
-  if (!result.success || !result.data) {
-    status.value = '未选择图片';
+function addCharacter() {
+  draft.characters.push(createCharacter());
+}
+
+function removeCharacter(index: number) {
+  if (draft.characters.length === 1) {
+    status.value = '至少保留一个角色。';
     return;
   }
-  draft.illustration.originalImagePath = result.data.path;
-  draft.illustration.exportImagePath = result.data.path;
-  status.value = '已加载角色图片';
+  draft.characters.splice(index, 1);
+}
+
+function addWorldEntry() {
+  draft.worldBook.entries.push(createWorldEntry());
+}
+
+function removeWorldEntry(index: number) {
+  draft.worldBook.entries.splice(index, 1);
+}
+
+function setCharacterKeywords(index: number, text: string) {
+  draft.characters[index].triggerKeywords = splitKeywords(text);
+}
+
+function setWorldEntryKeywords(index: number, text: string) {
+  draft.worldBook.entries[index].keywords = splitKeywords(text);
+}
+
+async function pickImage() {
+  imageInputRef.value?.click();
+}
+
+async function importCard() {
+  status.value = '请选择要导入的角色卡文件...';
+  importInputRef.value?.click();
+}
+
+async function performImport(file: File) {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    status.value = `正在导入角色卡: ${file.name}`;
+    const result = await apiRequest<{ draft: CharacterDraft; sourcePath: string }>('/card/import-file', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!result.success || !result.data) {
+      status.value = `导入失败: ${result.message}`;
+      return;
+    }
+    Object.assign(draft, result.data.draft);
+    previewSeed.value = Date.now();
+    await refreshDraftList();
+    status.value = `导入成功：条目 ${result.data.draft.worldBook.entries.length} 条，图片路径已更新`;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    status.value = `导入异常: ${detail}`;
+  }
+}
+
+async function onImportInputChange(event: Event) {
+  try {
+    const target = event.target as HTMLInputElement;
+    const file = target.files?.[0];
+    target.value = '';
+    if (!file) {
+      status.value = '未选择导入文件';
+      return;
+    }
+
+    await performImport(file);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    status.value = `读取文件失败: ${detail}`;
+  }
+}
+
+async function onImageInputChange(event: Event) {
+  try {
+    const target = event.target as HTMLInputElement;
+    const file = target.files?.[0];
+    target.value = '';
+    if (!file) {
+      status.value = '未选择图片';
+      return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    status.value = `正在上传图片: ${file.name}`;
+    const result = await apiRequest<UploadImageResponse>('/files/upload-image', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!result.success || !result.data) {
+      status.value = `图片上传失败: ${result.message}`;
+      return;
+    }
+    draft.illustration.originalImagePath = result.data.path;
+    draft.illustration.generatedImagePath = '';
+    draft.illustration.exportImagePath = result.data.path;
+    previewSeed.value = Date.now();
+    status.value = '已加载角色图片';
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    status.value = `图片上传异常: ${detail}`;
+  }
 }
 
 async function generateImagePrompt() {
   status.value = '正在生成绘图提示词...';
-  const result = await window.rolePlayCard.generateImagePrompt(structuredClone(draft));
+  const result = await apiRequest<{ prompt: string; negativePrompt: string }>('/ai/image-prompt', {
+    method: 'POST',
+    body: JSON.stringify({ draft: clonePlain(draft) }),
+  });
   if (!result.success || !result.data) {
     status.value = `提示词生成失败: ${result.message}`;
     return;
@@ -215,10 +450,14 @@ async function generateImagePrompt() {
 
 async function generateImage() {
   status.value = '正在生成角色图...';
-  const result = await window.rolePlayCard.generateImage({
-    draft: structuredClone(draft),
-    prompt: draft.illustration.promptSnapshot,
-    negativePrompt: draft.illustration.negativePrompt,
+  const result = await apiRequest<{ imagePath: string; prompt: string }>('/ai/image', {
+    method: 'POST',
+    body: JSON.stringify({
+      draft: clonePlain(draft),
+      prompt: draft.illustration.promptSnapshot,
+      negativePrompt: draft.illustration.negativePrompt,
+      settings: clonePlain(settings),
+    }),
   });
   if (!result.success || !result.data) {
     status.value = `角色图生成失败: ${result.message}`;
@@ -226,23 +465,25 @@ async function generateImage() {
   }
   draft.illustration.generatedImagePath = result.data.imagePath;
   draft.illustration.exportImagePath = result.data.imagePath;
+  previewSeed.value = Date.now();
   status.value = '角色图已生成';
 }
 
 async function exportCard() {
-  const saveDialog = await window.rolePlayCard.pickExportPath(draft.profile.name || 'character-card');
-  if (!saveDialog.success || !saveDialog.data) {
-    status.value = '导出已取消';
+  status.value = '正在导出 TavernAI PNG...';
+  const result = await apiRequest<ExportCharacterCardResponse>('/card/export-download', {
+    method: 'POST',
+    body: JSON.stringify({
+      draft: clonePlain(draft),
+      imagePath: draft.illustration.exportImagePath,
+    }),
+  });
+  if (!result.success || !result.data) {
+    status.value = `导出失败: ${result.message}`;
     return;
   }
-
-  status.value = '正在导出 TavernAI PNG...';
-  const result = await window.rolePlayCard.exportCard({
-    draft: structuredClone(draft),
-    imagePath: draft.illustration.exportImagePath,
-    outputPath: saveDialog.data.path,
-  });
-  status.value = result.success ? `导出成功: ${saveDialog.data.path}` : `导出失败: ${result.message}`;
+  downloadBase64Png(result.data.filename, result.data.imageBase64);
+  status.value = `导出成功: ${result.data.filename}`;
 }
 
 function resetDraft() {
@@ -253,54 +494,44 @@ function resetDraft() {
 watch(
   draft,
   () => {
-    draft.updatedAt = nowIso();
     queueAutosave();
   },
   { deep: true },
 );
 
 onMounted(async () => {
-  const [info] = await Promise.all([window.rolePlayCard.getAppInfo(), loadSettings(), refreshDraftList()]);
-  appDataDir.value = info.appDataDir;
+  await loadSettings();
+  appDataDir.value = 'Web 模式（设置保存在 Cookie）';
+  await refreshDraftList();
   if (drafts.value[0]) {
     await openDraft(drafts.value[0].id);
   } else {
     await saveDraft(false);
   }
 });
-
-const fieldGroups = [
-  {
-    title: '角色描述',
-    fields: [
-      ['profile.name', '姓名'],
-      ['profile.age', '年龄'],
-      ['profile.gender', '性别'],
-      ['profile.appearance', '外貌'],
-      ['profile.personality', '性格'],
-      ['profile.speakingStyle', '说话风格'],
-      ['profile.background', '背景'],
-    ],
-  },
-  {
-    title: '首屏信息',
-    fields: [
-      ['opening.greeting', '开场白'],
-      ['opening.scenario', '场景'],
-      ['opening.exampleDialogue', '示例对话'],
-      ['opening.firstMessage', '首条消息'],
-    ],
-  },
-];
 </script>
 
 <template>
   <div class="app-shell">
+    <input
+      ref="imageInputRef"
+      class="hidden-input"
+      type="file"
+      accept=".png,.jpg,.jpeg,.webp"
+      @change="onImageInputChange"
+    />
+    <input
+      ref="importInputRef"
+      class="hidden-input"
+      type="file"
+      accept=".png,.json"
+      @change="onImportInputChange"
+    />
     <aside class="sidebar">
       <div>
         <p class="eyebrow">RolePlayCard</p>
         <h1>AI 角色卡创建器</h1>
-        <p class="muted">本地 Electron + Python 工作流</p>
+        <p class="muted">Web 版：多角色 + 条目化世界书</p>
       </div>
 
       <div class="nav-group">
@@ -323,8 +554,11 @@ const fieldGroups = [
           <h2>草稿</h2>
           <button @click="resetDraft">新建</button>
         </div>
-        <button @click="saveDraft(false)">保存</button>
-        <button @click="saveDraft(true)">另存为</button>
+        <div class="inline-actions">
+          <button @click="saveDraft(false)">保存</button>
+          <button @click="saveDraft(true)">另存为</button>
+          <button @click="importCard">导入卡</button>
+        </div>
         <div class="draft-list">
           <button
             v-for="item in drafts"
@@ -332,7 +566,7 @@ const fieldGroups = [
             class="draft-item"
             @click="openDraft(item.id)"
           >
-            <strong>{{ item.name || '未命名角色' }}</strong>
+            <strong>{{ item.name || '未命名角色卡' }}</strong>
             <span>{{ new Date(item.updatedAt).toLocaleString() }}</span>
           </button>
         </div>
@@ -353,35 +587,36 @@ const fieldGroups = [
 
       <section v-if="activeView === 'editor'" class="content-grid">
         <div class="editor-column">
-          <section
-            v-for="group in fieldGroups"
-            :key="group.title"
-            class="card"
-          >
+          <section class="card">
             <div class="panel-header">
-              <h2>{{ group.title }}</h2>
+              <h2>角色卡信息</h2>
             </div>
-            <div
-              v-for="[field, label] in group.fields"
-              :key="field"
-              class="field"
-            >
-              <label :for="field">{{ label }}</label>
+            <div class="field">
+              <label for="cardName">角色卡名称</label>
+              <input
+                id="cardName"
+                v-model="draft.card.name"
+                placeholder="例如：霓虹城调查局"
+              />
+            </div>
+            <div class="field">
+              <label for="cardDescription">角色卡描述</label>
               <textarea
-                :id="field"
-                v-model="(draft as any)[field.split('.')[0]][field.split('.')[1]]"
-                rows="3"
+                id="cardDescription"
+                v-model="draft.card.description"
+                rows="4"
+                placeholder="描述这个角色卡的世界观、玩法和风格"
               />
               <div class="inline-actions">
                 <button
-                  @click="runFieldAI(field, 'generate')"
-                  :disabled="aiBusyField === field"
+                  @click="runFieldAI('card.description', 'generate', draft.card.description, (v) => (draft.card.description = v))"
+                  :disabled="aiBusyField === 'card.description'"
                 >
                   AI 生成
                 </button>
                 <button
-                  @click="runFieldAI(field, 'rewrite')"
-                  :disabled="aiBusyField === field"
+                  @click="runFieldAI('card.description', 'rewrite', draft.card.description, (v) => (draft.card.description = v))"
+                  :disabled="aiBusyField === 'card.description'"
                 >
                   AI 改写
                 </button>
@@ -391,13 +626,179 @@ const fieldGroups = [
 
           <section class="card">
             <div class="panel-header">
-              <h2>世界书</h2>
+              <h2>角色列表</h2>
+              <button @click="addCharacter">添加角色</button>
             </div>
-            <textarea
-              v-model="draft.worldBook"
-              rows="8"
-              placeholder="输入世界观、组织、设定规则等内容"
-            />
+            <div
+              v-for="(character, index) in draft.characters"
+              :key="character.id"
+              class="nested-card"
+            >
+              <div class="panel-header">
+                <h3>角色 {{ index + 1 }}</h3>
+                <button @click="removeCharacter(index)">删除</button>
+              </div>
+              <div class="field-grid">
+                <label>启用</label>
+                <input v-model="character.enabled" type="checkbox" class="checkbox" />
+                <label>蓝灯/绿灯</label>
+                <select v-model="character.triggerMode">
+                  <option value="always">蓝灯（永久触发）</option>
+                  <option value="keyword">绿灯（关键词触发）</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label>姓名</label>
+                <input v-model="character.name" />
+                <div class="inline-actions">
+                  <button
+                    @click="runFieldAI(`characters.${index}.name`, 'generate', character.name, (v) => (character.name = v))"
+                    :disabled="aiBusyField === `characters.${index}.name`"
+                  >
+                    AI 生成
+                  </button>
+                  <button
+                    @click="runFieldAI(`characters.${index}.name`, 'rewrite', character.name, (v) => (character.name = v))"
+                    :disabled="aiBusyField === `characters.${index}.name`"
+                  >
+                    AI 改写
+                  </button>
+                </div>
+              </div>
+
+              <div class="field">
+                <label>触发关键词（逗号分隔）</label>
+                <input
+                  :value="character.triggerKeywords.join(', ')"
+                  @input="setCharacterKeywords(index, ($event.target as HTMLInputElement).value)"
+                />
+              </div>
+
+              <div class="field-grid">
+                <label>年龄</label>
+                <input v-model="character.age" />
+                <label>说话方式</label>
+                <input v-model="character.speakingStyle" />
+              </div>
+
+              <div class="field">
+                <label>外貌</label>
+                <textarea v-model="character.appearance" rows="3" />
+              </div>
+              <div class="field">
+                <label>性格</label>
+                <textarea v-model="character.personality" rows="3" />
+              </div>
+              <div class="field">
+                <label>说话示例</label>
+                <textarea v-model="character.speakingExample" rows="3" />
+              </div>
+              <div class="field">
+                <label>背景</label>
+                <textarea v-model="character.background" rows="3" />
+              </div>
+
+              <div class="field-grid">
+                <label>触发顺序</label>
+                <input v-model.number="character.advanced.insertionOrder" type="number" />
+                <label>触发概率 (%)</label>
+                <input v-model.number="character.advanced.triggerProbability" type="number" min="0" max="100" />
+                <label>插入位置</label>
+                <select v-model="character.advanced.insertionPosition">
+                  <option value="after_char">角色定义之后</option>
+                  <option value="before_char">角色定义之前</option>
+                  <option value="before_example">示例消息之前</option>
+                  <option value="after_example">示例消息之后</option>
+                  <option value="top_an">A/N 顶部</option>
+                  <option value="bottom_an">A/N 底部</option>
+                  <option value="at_depth">@Depth</option>
+                </select>
+                <label>深度 (Depth)</label>
+                <input v-model.number="character.advanced.depth" type="number" min="0" />
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="panel-header">
+              <h2>首屏信息</h2>
+            </div>
+            <div class="field">
+              <label>开场白</label>
+              <textarea v-model="draft.opening.greeting" rows="2" />
+            </div>
+            <div class="field">
+              <label>场景</label>
+              <textarea v-model="draft.opening.scenario" rows="3" />
+            </div>
+            <div class="field">
+              <label>示例对话</label>
+              <textarea v-model="draft.opening.exampleDialogue" rows="4" />
+            </div>
+            <div class="field">
+              <label>首条消息</label>
+              <textarea v-model="draft.opening.firstMessage" rows="5" />
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="panel-header">
+              <h2>世界书条目</h2>
+              <button @click="addWorldEntry">添加条目</button>
+            </div>
+            <div
+              v-for="(entry, index) in draft.worldBook.entries"
+              :key="entry.id"
+              class="nested-card"
+            >
+              <div class="panel-header">
+                <h3>条目 {{ index + 1 }}</h3>
+                <button @click="removeWorldEntry(index)">删除</button>
+              </div>
+              <div class="field-grid">
+                <label>启用</label>
+                <input v-model="entry.enabled" type="checkbox" class="checkbox" />
+                <label>蓝灯/绿灯</label>
+                <select v-model="entry.triggerMode">
+                  <option value="always">蓝灯（永久触发）</option>
+                  <option value="keyword">绿灯（关键词触发）</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>条目标题</label>
+                <input v-model="entry.title" />
+              </div>
+              <div class="field">
+                <label>关键词（逗号分隔）</label>
+                <input
+                  :value="entry.keywords.join(', ')"
+                  @input="setWorldEntryKeywords(index, ($event.target as HTMLInputElement).value)"
+                />
+              </div>
+              <div class="field">
+                <label>条目内容</label>
+                <textarea v-model="entry.content" rows="4" />
+              </div>
+              <div class="field-grid">
+                <label>触发顺序</label>
+                <input v-model.number="entry.advanced.insertionOrder" type="number" />
+                <label>触发概率 (%)</label>
+                <input v-model.number="entry.advanced.triggerProbability" type="number" min="0" max="100" />
+                <label>插入位置</label>
+                <select v-model="entry.advanced.insertionPosition">
+                  <option value="after_char">角色定义之后</option>
+                  <option value="before_char">角色定义之前</option>
+                  <option value="before_example">示例消息之前</option>
+                  <option value="after_example">示例消息之后</option>
+                  <option value="top_an">A/N 顶部</option>
+                  <option value="bottom_an">A/N 底部</option>
+                  <option value="at_depth">@Depth</option>
+                </select>
+                <label>深度 (Depth)</label>
+                <input v-model.number="entry.advanced.depth" type="number" min="0" />
+              </div>
+            </div>
           </section>
         </div>
 
@@ -409,7 +810,7 @@ const fieldGroups = [
             <div class="image-box">
               <img
                 v-if="imagePreview"
-                :src="`file://${imagePreview}`"
+                :src="imagePreview"
                 alt="角色图预览"
               />
               <p v-else>尚未选择角色图</p>
@@ -420,29 +821,20 @@ const fieldGroups = [
               <button @click="generateImage">使用 AI 文生图</button>
             </div>
             <div class="field">
-              <label for="stylePrompt">画风偏好</label>
+              <label>画风偏好</label>
               <textarea
-                id="stylePrompt"
                 v-model="draft.illustration.stylePrompt"
                 rows="3"
                 placeholder="例如：anime portrait, warm tone, cinematic lighting"
               />
             </div>
             <div class="field">
-              <label for="promptSnapshot">提示词</label>
-              <textarea
-                id="promptSnapshot"
-                v-model="draft.illustration.promptSnapshot"
-                rows="5"
-              />
+              <label>提示词</label>
+              <textarea v-model="draft.illustration.promptSnapshot" rows="4" />
             </div>
             <div class="field">
-              <label for="negativePrompt">负面提示词</label>
-              <textarea
-                id="negativePrompt"
-                v-model="draft.illustration.negativePrompt"
-                rows="4"
-              />
+              <label>负面提示词</label>
+              <textarea v-model="draft.illustration.negativePrompt" rows="3" />
             </div>
           </section>
 

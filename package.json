@@ -3,25 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "workspaces": [
-    "electron-shell",
     "vue-renderer"
   ],
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron:build\" \"npm:dev:electron:run\"",
-    "dev:renderer": "npm run dev -w vue-renderer",
-    "dev:electron:build": "npm run dev -w electron-shell",
-    "dev:electron:run": "wait-on tcp:5173 .build/electron-shell/electron-shell/src/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .build/electron-shell/electron-shell/src/main.js",
-    "build": "npm run build -w vue-renderer && npm run build -w electron-shell",
-    "typecheck": "npm run typecheck -w vue-renderer && npm run typecheck -w electron-shell",
-    "test:python": "python3 -m pytest python-service/tests",
+    "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:api\"",
+    "dev:web": "npm run dev -w vue-renderer",
+    "dev:api": "python python-service/src/server.py --host 127.0.0.1 --port 8765 --app-data .role-play-card-data",
+    "build": "npm run build -w vue-renderer",
+    "typecheck": "npm run typecheck -w vue-renderer",
+    "test:python": "python -m pytest python-service/tests",
     "test": "npm run test:python"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "cross-env": "^7.0.3",
-    "electron": "^35.1.4",
-    "tsx": "^4.19.3",
-    "typescript": "^5.8.2",
-    "wait-on": "^8.0.3"
+    "typescript": "^5.8.2"
   }
 }

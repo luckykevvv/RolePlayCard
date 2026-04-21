@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from models import default_draft, default_settings, merge_defaults, now_iso
+from models import default_draft, default_settings, merge_defaults, normalize_draft, now_iso
 
 
 class AppStorage:
@@ -42,11 +42,14 @@ class AppStorage:
         drafts: list[dict[str, str]] = []
         for path in sorted(self.drafts_dir.glob("*.json")):
             with path.open("r", encoding="utf-8") as handle:
-                draft = merge_defaults(default_draft(), json.load(handle))
+                draft = normalize_draft(json.load(handle))
+            name = draft["card"]["name"].strip()
+            if not name:
+                name = draft["characters"][0]["name"].strip()
             drafts.append(
                 {
                     "id": draft["id"],
-                    "name": draft["profile"]["name"],
+                    "name": name,
                     "updatedAt": draft["updatedAt"],
                 }
             )
@@ -58,10 +61,10 @@ class AppStorage:
         if not path.exists():
             raise FileNotFoundError(f"Draft {draft_id} not found.")
         with path.open("r", encoding="utf-8") as handle:
-            return merge_defaults(default_draft(), json.load(handle))
+            return normalize_draft(json.load(handle))
 
     def save_draft(self, draft: dict[str, Any], save_as: bool = False) -> dict[str, Any]:
-        merged = merge_defaults(default_draft(), draft)
+        merged = normalize_draft(draft)
         if save_as:
             merged["id"] = str(uuid4())
             merged["createdAt"] = now_iso()
