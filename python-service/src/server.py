@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,10 +15,18 @@ if str(CURRENT_DIR) not in sys.path:
 
 from service import RolePlayCardService, fail, ok
 
+CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
 
 def create_app(app_data_dir: str) -> Flask:
     service = RolePlayCardService(app_data_dir)
     app = Flask(__name__)
+
+    def require_client_id() -> tuple[str | None, Any | None]:
+        client_id = str(request.headers.get("X-Client-Id", "")).strip()
+        if CLIENT_ID_RE.fullmatch(client_id):
+            return client_id, None
+        return None, (jsonify(fail("Missing or invalid X-Client-Id header.", "validation_error")), 400)
 
     @app.get("/health")
     @app.get("/api/health")
@@ -50,19 +59,31 @@ def create_app(app_data_dir: str) -> Flask:
 
     @app.get("/api/drafts")
     def list_drafts() -> Any:
-        return jsonify(service.list_drafts())
+        client_id, error_response = require_client_id()
+        if error_response is not None:
+            return error_response
+        return jsonify(service.list_drafts(client_id))
 
     @app.post("/api/drafts/clear")
     def clear_all_data() -> Any:
-        return jsonify(service.clear_all_data())
+        client_id, error_response = require_client_id()
+        if error_response is not None:
+            return error_response
+        return jsonify(service.clear_all_data(client_id))
 
     @app.get("/api/drafts/<draft_id>")
     def load_draft(draft_id: str) -> Any:
-        return jsonify(service.load_draft(draft_id))
+        client_id, error_response = require_client_id()
+        if error_response is not None:
+            return error_response
+        return jsonify(service.load_draft(draft_id, client_id))
 
     @app.post("/api/drafts")
     def save_draft() -> Any:
-        return jsonify(service.save_draft(request.get_json(force=True)))
+        client_id, error_response = require_client_id()
+        if error_response is not None:
+            return error_response
+        return jsonify(service.save_draft(request.get_json(force=True), client_id))
 
     @app.post("/api/ai/field")
     def generate_field() -> Any:

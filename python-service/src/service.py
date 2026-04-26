@@ -30,6 +30,7 @@ from prompts import (
     build_timeline_organize_prompt,
 )
 from providers import ProviderRegistry
+from segment_merge import build_segment_change_set, decide_bridge_nodes_with_llm
 from storage import AppStorage
 
 
@@ -259,6 +260,23 @@ def _is_blank_opening(opening: dict[str, Any]) -> bool:
             str(opening.get("scenario", "")).strip(),
             str(opening.get("exampleDialogue", "")).strip(),
             str(opening.get("firstMessage", "")).strip(),
+        ]
+    )
+
+
+def _is_blank_character_entry(character: dict[str, Any]) -> bool:
+    trigger_keywords = character.get("triggerKeywords", [])
+    has_keywords = bool(_split_keywords(trigger_keywords))
+    return not any(
+        [
+            str(character.get("name", "")).strip(),
+            has_keywords,
+            str(character.get("age", "")).strip(),
+            str(character.get("appearance", "")).strip(),
+            str(character.get("personality", "")).strip(),
+            str(character.get("speakingStyle", "")).strip(),
+            str(character.get("speakingExample", "")).strip(),
+            str(character.get("background", "")).strip(),
         ]
     )
 
@@ -1259,6 +1277,24 @@ class RolePlayCardService:
             for key in refreshed_candidates:
                 key_to_character[key] = existing
 
+        named_characters = [
+            item
+            for item in base_characters
+            if isinstance(item, dict) and str(item.get("name", "")).strip()
+        ]
+        if named_characters:
+            non_blank = [
+                item
+                for item in base_characters
+                if isinstance(item, dict) and not _is_blank_character_entry(item)
+            ]
+            blank = [
+                item
+                for item in base_characters
+                if isinstance(item, dict) and _is_blank_character_entry(item)
+            ]
+            base_draft["characters"] = non_blank + (blank[:1] if blank else [])
+
     def _merge_world_entries_incremental(
         self,
         base_draft: dict[str, Any],
@@ -1377,48 +1413,6 @@ class RolePlayCardService:
         combo = f"{time_key}|{event_key}".strip("|")
         return f"event:{combo}" if combo else ""
 
-    def _decide_bridge_nodes_with_llm(
-        self,
-        anchor_node: dict[str, Any] | None,
-        candidate_nodes: list[dict[str, Any]],
-        provider: Any | None,
-        runtime_config: dict[str, Any] | None,
-    ) -> set[str]:
-        if not anchor_node or not candidate_nodes:
-            return set()
-        # Fallback: keep timeline continuity when no LLM judge is available.
-        if provider is None or not runtime_config:
-            return {str(node.get("id", "")).strip() for node in candidate_nodes if str(node.get("id", "")).strip()}
-
-        prompt = build_timeline_bridge_decision_prompt(anchor_node=anchor_node, candidate_nodes=candidate_nodes)
-        try:
-            generated = provider.generate(runtime_config, prompt)
-        except Exception:
-            return {str(node.get("id", "")).strip() for node in candidate_nodes if str(node.get("id", "")).strip()}
-
-        parsed = _extract_json_object(generated)
-        if not isinstance(parsed, dict):
-            return {str(node.get("id", "")).strip() for node in candidate_nodes if str(node.get("id", "")).strip()}
-
-        raw_decisions = parsed.get("decisions", [])
-        candidate_ids = {str(node.get("id", "")).strip() for node in candidate_nodes if str(node.get("id", "")).strip()}
-        bridged: set[str] = set()
-        has_valid_decision = False
-        if isinstance(raw_decisions, list):
-            for item in raw_decisions:
-                if not isinstance(item, dict):
-                    continue
-                node_id = str(item.get("nodeId", "")).strip()
-                if not node_id or node_id not in candidate_ids:
-                    continue
-                has_valid_decision = True
-                if bool(item.get("bridgeToAnchor", False)):
-                    bridged.add(node_id)
-        # If the model returns nothing useful, default to continuity.
-        if not has_valid_decision and candidate_ids:
-            return candidate_ids
-        return bridged
-
     def _pick_timeline_anchor_id(self, nodes: list[dict[str, Any]]) -> str:
         valid_nodes = [node for node in nodes if isinstance(node, dict)]
         if not valid_nodes:
@@ -1527,11 +1521,13 @@ class RolePlayCardService:
                 if not str(node.get("parentId", "")).strip():
                     bridge_candidates.append(node)
 
-        decided_bridge_ids = self._decide_bridge_nodes_with_llm(
+        decided_bridge_ids = decide_bridge_nodes_with_llm(
             anchor_node=segment_anchor_node,
             candidate_nodes=bridge_candidates,
             provider=provider,
             runtime_config=runtime_config,
+            build_prompt=build_timeline_bridge_decision_prompt,
+            parse_json=_extract_json_object,
         )
         for node in bridge_candidates:
             node_id = str(node.get("id", "")).strip()
@@ -1575,6 +1571,15 @@ class RolePlayCardService:
             provider=provider,
             runtime_config=runtime_config,
         )
+        merged_card = merged.get("card", {})
+        if isinstance(merged_card, dict) and not str(merged_card.get("name", "")).strip():
+            for character in merged.get("characters", []):
+                if not isinstance(character, dict):
+                    continue
+                name = str(character.get("name", "")).strip()
+                if name:
+                    merged_card["name"] = name
+                    break
         merged["sourceType"] = "roleplaycard"
         return normalize_draft(merged), report
 
@@ -1584,11 +1589,11 @@ class RolePlayCardService:
         return default_settings()
 
     def get_settings(self) -> dict[str, Any]:
-        return ok(default_settings())
+        return ok(default_settings(), "Server-side settings disabled in web mode.")
 
     def save_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
-        merged = merge_defaults(default_settings(), settings)
-        return ok(merged, "Settings accepted. Persist this in browser cookie.")
+        merged = merge_defaults(default_settings(), settings if isinstance(settings, dict) else {})
+        return ok(merged, "Server-side settings disabled in web mode.")
 
     def list_text_prefix_prompts(self) -> dict[str, Any]:
         entries = self._load_builtin_prefix_prompts()
@@ -1643,24 +1648,36 @@ class RolePlayCardService:
             return fail(str(exc), "provider_model_list_failed")
         return ok({"provider": config["provider"], "detail": detail, "models": models}, "Image provider connected.")
 
-    def list_drafts(self) -> dict[str, Any]:
-        return ok(self.storage.list_drafts())
+    def list_drafts(self, client_id: str = "default") -> dict[str, Any]:
+        try:
+            return ok(self.storage.list_drafts(client_id))
+        except ValueError as exc:
+            return fail(str(exc), "validation_error")
 
-    def clear_all_data(self) -> dict[str, Any]:
-        result = self.storage.clear_all_data()
+    def clear_all_data(self, client_id: str = "default") -> dict[str, Any]:
+        try:
+            result = self.storage.clear_all_data(client_id)
+        except ValueError as exc:
+            return fail(str(exc), "validation_error")
         self.imports_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
-        return ok(result, "All stored data cleared.")
+        return ok(result, "Current user's stored data cleared.")
 
-    def load_draft(self, draft_id: str) -> dict[str, Any]:
+    def load_draft(self, draft_id: str, client_id: str = "default") -> dict[str, Any]:
         try:
-            return ok(self.storage.load_draft(draft_id))
+            return ok(self.storage.load_draft(draft_id, client_id))
         except FileNotFoundError as exc:
             return fail(str(exc), "draft_not_found")
+        except ValueError as exc:
+            return fail(str(exc), "validation_error")
 
-    def save_draft(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def save_draft(self, payload: dict[str, Any], client_id: str = "default") -> dict[str, Any]:
         draft = normalize_draft(payload["draft"])
-        return ok(self.storage.save_draft(draft, save_as=payload.get("saveAs", False)), "Draft saved.")
+        try:
+            saved = self.storage.save_draft(draft, save_as=payload.get("saveAs", False), client_id=client_id)
+        except ValueError as exc:
+            return fail(str(exc), "validation_error")
+        return ok(saved, "Draft saved.")
 
     def preview_story_segments(self, payload: dict[str, Any]) -> dict[str, Any]:
         story_text = str(payload.get("storyText", ""))
@@ -1838,6 +1855,7 @@ class RolePlayCardService:
             provider=provider,
             runtime_config=runtime_config,
         )
+        change_set = build_segment_change_set(base_draft, merged_draft)
         existing_state = base_draft.get("storyGenerationState", {})
         existing_current = 0
         existing_mode = "hard_buffer"
@@ -1856,6 +1874,7 @@ class RolePlayCardService:
             {
                 "draft": normalize_draft(merged_draft),
                 "segmentReport": report,
+                "changeSet": change_set,
             },
             "Segment merged into draft.",
         )
@@ -1992,48 +2011,60 @@ class RolePlayCardService:
 
         normalized_characters: list[dict[str, Any]] = []
         character_raw_outputs: list[str] = []
-        if segment_mode:
-            for seed in character_seeds[:12]:
-                character = self._normalize_character_from_seed(seed)
-                if character["name"]:
-                    normalized_characters.append(character)
-        else:
-            for seed in character_seeds[:12]:
-                character_prompt = build_character_from_story_prompt(
-                    target_character=seed,
-                    previous_characters=normalized_characters,
-                    story_summary=story_summary,
-                    story_text=story_text,
-                    draft=draft,
-                )
+        character_limit = 6 if segment_mode else 12
+        for seed in character_seeds[:character_limit]:
+            character_prompt = build_character_from_story_prompt(
+                target_character=seed,
+                previous_characters=normalized_characters,
+                story_summary=story_summary,
+                story_text=story_text,
+                draft=draft,
+            )
 
-                generated_character = ""
-                parsed_character: dict[str, Any] = {}
-                try:
+            generated_character = ""
+            parsed_character: dict[str, Any] = {}
+            try:
+                if segment_mode:
+                    parsed_candidate, generated_character = self._generate_json_object_with_retry(
+                        provider=provider,
+                        runtime_config=runtime_config,
+                        prompt=character_prompt,
+                        task_name=f"分段角色补全:{str(seed.get('name', '角色'))[:24]}",
+                        max_attempts=2,
+                    )
+                    if isinstance(parsed_candidate, dict):
+                        parsed_character = parsed_candidate
+                else:
                     generated_character = provider.generate(runtime_config, character_prompt)
                     maybe_parsed = _extract_json_object(generated_character)
                     if isinstance(maybe_parsed, dict):
                         parsed_character = maybe_parsed
-                except Exception:
-                    parsed_character = {}
-                character_raw_outputs.append(generated_character)
+            except Exception:
+                parsed_character = {}
+            character_raw_outputs.append(generated_character)
 
-                character = merge_defaults(default_character_entry(), {})
-                character["name"] = str(parsed_character.get("name", seed.get("name", "")))
-                character["age"] = str(parsed_character.get("age", seed.get("age", "")))
-                keywords = _split_keywords(parsed_character.get("triggerKeywords", []))
-                if not keywords:
-                    keywords = _split_keywords(seed.get("triggerKeywords", []))
-                if not keywords and character["name"]:
-                    keywords = [character["name"]]
-                character["triggerKeywords"] = keywords
-                character["appearance"] = str(parsed_character.get("appearance", ""))
-                character["personality"] = str(parsed_character.get("personality", ""))
-                character["speakingStyle"] = str(parsed_character.get("speakingStyle", ""))
-                character["speakingExample"] = str(parsed_character.get("speakingExample", ""))
-                character["background"] = str(parsed_character.get("background", seed.get("hints", "")))
+            if segment_mode and not parsed_character:
+                character = self._normalize_character_from_seed(seed)
                 if character["name"]:
                     normalized_characters.append(character)
+                continue
+
+            character = merge_defaults(default_character_entry(), {})
+            character["name"] = str(parsed_character.get("name", seed.get("name", "")))
+            character["age"] = str(parsed_character.get("age", seed.get("age", "")))
+            keywords = _split_keywords(parsed_character.get("triggerKeywords", []))
+            if not keywords:
+                keywords = _split_keywords(seed.get("triggerKeywords", []))
+            if not keywords and character["name"]:
+                keywords = [character["name"]]
+            character["triggerKeywords"] = keywords
+            character["appearance"] = str(parsed_character.get("appearance", ""))
+            character["personality"] = str(parsed_character.get("personality", ""))
+            character["speakingStyle"] = str(parsed_character.get("speakingStyle", ""))
+            character["speakingExample"] = str(parsed_character.get("speakingExample", ""))
+            character["background"] = str(parsed_character.get("background", seed.get("hints", "")))
+            if character["name"]:
+                normalized_characters.append(character)
         if normalized_characters:
             draft["characters"] = normalized_characters
 

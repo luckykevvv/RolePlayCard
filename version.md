@@ -1,5 +1,26 @@
 # RolePlayCard 版本日志
 
+## 1.1.1（2026-04-27）
+
+### Web 多用户隔离修复（公网部署重点）
+- 草稿接口改为按 `X-Client-Id` 隔离：`/api/drafts`、`/api/drafts/<id>`、`/api/drafts/clear` 只操作当前客户端空间。
+- 后端新增 `X-Client-Id` 校验（缺失或非法直接拒绝），避免匿名共享数据目录导致“全员可见草稿”。
+- 草稿存储从单目录改为“按 client_id 哈希分桶”，并新增测试覆盖“用户 A/B 相互不可见、清空仅影响当前用户”。
+
+### 设置持久化改造（避免用户配置交叉）
+- 前端设置改为浏览器 `localStorage` 主存储（并兼容迁移旧 Cookie）。
+- 前端不再依赖服务端全局 settings 落盘；后端 settings 接口改为无状态返回，防止公网多用户配置互相覆盖。
+- AI 请求继续使用前端携带的 `settings`，用户配置保持浏览器级隔离。
+
+### 生成质量与稳定性补强
+- 调整提示词：首屏信息、地点设定、时间线节点改为“详细且自包含”，避免依赖原文才能理解。
+- 分段/整文 AI 调用超时统一遵循 UI `timeoutMs` 设置，不再受前端固定 60s 限制。
+
+### 测试与构建
+- `python -m pytest python-service/tests` 通过（38 tests）。
+- `npm run test -w vue-renderer` 通过（4 tests）。
+- `npm run typecheck -w vue-renderer` 与 `npm run build -w vue-renderer` 通过。
+
 ## 1.1.0（2026-04-26）
 
 ### 长篇分段增量（默认手动）上线

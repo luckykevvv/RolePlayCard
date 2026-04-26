@@ -137,6 +137,24 @@ def default_story_generation_state() -> dict[str, Any]:
     }
 
 
+def default_batch_generation_state() -> dict[str, Any]:
+    return {
+        "status": "idle",
+        "currentSegment": 0,
+        "totalSegments": 0,
+        "failedSegmentIndex": None,
+        "errorMessage": "",
+    }
+
+
+def default_workflow_state() -> dict[str, Any]:
+    return {
+        "editorMode": "expert",
+        "wizardStep": "input",
+        "batchGeneration": default_batch_generation_state(),
+    }
+
+
 def default_draft() -> dict[str, Any]:
     timestamp = now_iso()
     opening = default_opening_entry()
@@ -166,6 +184,7 @@ def default_draft() -> dict[str, Any]:
             "stylePrompt": "",
         },
         "storyGenerationState": None,
+        "workflowState": default_workflow_state(),
     }
 
 
@@ -431,5 +450,55 @@ def normalize_draft(incoming: dict[str, Any]) -> dict[str, Any]:
         }
     else:
         normalized["storyGenerationState"] = None
+
+    workflow_state = normalized.get("workflowState")
+    if isinstance(workflow_state, dict):
+        merged_workflow = merge_defaults(default_workflow_state(), workflow_state)
+        editor_mode = str(merged_workflow.get("editorMode", "expert")).strip().lower()
+        if editor_mode not in {"wizard", "expert"}:
+            editor_mode = "expert"
+        wizard_step = str(merged_workflow.get("wizardStep", "input")).strip().lower()
+        if wizard_step not in {"input", "segments", "review", "export"}:
+            wizard_step = "input"
+        batch_generation = merged_workflow.get("batchGeneration")
+        if isinstance(batch_generation, dict):
+            merged_batch = merge_defaults(default_batch_generation_state(), batch_generation)
+        else:
+            merged_batch = default_batch_generation_state()
+        status = str(merged_batch.get("status", "idle")).strip().lower()
+        if status not in {"idle", "running", "paused", "completed", "failed"}:
+            status = "idle"
+        try:
+            current_segment = max(0, int(merged_batch.get("currentSegment", 0)))
+        except (TypeError, ValueError):
+            current_segment = 0
+        try:
+            total_segments = max(0, int(merged_batch.get("totalSegments", 0)))
+        except (TypeError, ValueError):
+            total_segments = 0
+        if total_segments > 0:
+            current_segment = min(current_segment, total_segments)
+        failed_index_raw = merged_batch.get("failedSegmentIndex")
+        failed_index: int | None
+        if failed_index_raw is None or failed_index_raw == "":
+            failed_index = None
+        else:
+            try:
+                failed_index = max(0, int(failed_index_raw))
+            except (TypeError, ValueError):
+                failed_index = None
+        normalized["workflowState"] = {
+            "editorMode": editor_mode,
+            "wizardStep": wizard_step,
+            "batchGeneration": {
+                "status": status,
+                "currentSegment": current_segment,
+                "totalSegments": total_segments,
+                "failedSegmentIndex": failed_index,
+                "errorMessage": str(merged_batch.get("errorMessage", "")),
+            },
+        }
+    else:
+        normalized["workflowState"] = default_workflow_state()
 
     return normalized

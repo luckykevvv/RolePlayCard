@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from models import default_draft, default_settings, merge_defaults, normalize_draft, now_iso
+
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class AppStorage:
@@ -24,6 +28,19 @@ class AppStorage:
         self.cache_images_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
+    def _normalize_token(self, value: str, label: str) -> str:
+        token = str(value or "").strip()
+        if not TOKEN_RE.fullmatch(token):
+            raise ValueError(f"invalid {label}")
+        return token
+
+    def _draft_scope_dir(self, client_id: str) -> Path:
+        normalized = self._normalize_token(client_id, "client_id")
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+        scope = self.drafts_dir / digest
+        scope.mkdir(parents=True, exist_ok=True)
+        return scope
+
     def load_settings(self) -> dict[str, Any]:
         if not self.settings_path.exists():
             defaults = default_settings()
@@ -39,9 +56,10 @@ class AppStorage:
             json.dump(merged, handle, ensure_ascii=False, indent=2)
         return merged
 
-    def list_drafts(self) -> list[dict[str, str]]:
+    def list_drafts(self, client_id: str = "default") -> list[dict[str, str]]:
+        scope_dir = self._draft_scope_dir(client_id)
         drafts: list[dict[str, str]] = []
-        for path in sorted(self.drafts_dir.glob("*.json")):
+        for path in sorted(scope_dir.glob("*.json")):
             with path.open("r", encoding="utf-8") as handle:
                 draft = normalize_draft(json.load(handle))
             name = draft["card"]["name"].strip()
@@ -57,32 +75,43 @@ class AppStorage:
         drafts.sort(key=lambda item: item["updatedAt"], reverse=True)
         return drafts
 
-    def load_draft(self, draft_id: str) -> dict[str, Any]:
-        path = self.drafts_dir / f"{draft_id}.json"
+    def load_draft(self, draft_id: str, client_id: str = "default") -> dict[str, Any]:
+        scope_dir = self._draft_scope_dir(client_id)
+        draft_key = self._normalize_token(draft_id, "draft_id")
+        path = scope_dir / f"{draft_key}.json"
         if not path.exists():
             raise FileNotFoundError(f"Draft {draft_id} not found.")
         with path.open("r", encoding="utf-8") as handle:
             return normalize_draft(json.load(handle))
 
-    def save_draft(self, draft: dict[str, Any], save_as: bool = False) -> dict[str, Any]:
+    def save_draft(self, draft: dict[str, Any], save_as: bool = False, client_id: str = "default") -> dict[str, Any]:
+        scope_dir = self._draft_scope_dir(client_id)
         merged = normalize_draft(draft)
-        if save_as:
+        current_id = str(merged.get("id", "")).strip()
+        id_invalid = False
+        try:
+            if current_id:
+                self._normalize_token(current_id, "draft_id")
+        except ValueError:
+            id_invalid = True
+        if save_as or id_invalid or not current_id:
             merged["id"] = str(uuid4())
             merged["createdAt"] = now_iso()
         merged["updatedAt"] = now_iso()
-        path = self.drafts_dir / f"{merged['id']}.json"
+        path = scope_dir / f"{merged['id']}.json"
         with path.open("w", encoding="utf-8") as handle:
             json.dump(merged, handle, ensure_ascii=False, indent=2)
         return merged
 
-    def clear_all_data(self) -> dict[str, int]:
+    def clear_all_data(self, client_id: str = "default") -> dict[str, int]:
+        scope_dir = self._draft_scope_dir(client_id)
         removed_items = 0
-        if self.base_dir.exists():
-            for child in self.base_dir.iterdir():
+        if scope_dir.exists():
+            for child in scope_dir.iterdir():
                 if child.is_dir():
                     shutil.rmtree(child)
                 else:
                     child.unlink(missing_ok=True)
                 removed_items += 1
-        self._ensure_dirs()
+        scope_dir.mkdir(parents=True, exist_ok=True)
         return {"removedItems": removed_items}

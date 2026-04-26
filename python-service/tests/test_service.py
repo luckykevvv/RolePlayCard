@@ -316,6 +316,28 @@ def test_clear_all_data(tmp_path):
     assert (tmp_path / "exports").exists()
 
 
+def test_drafts_are_isolated_by_client_id(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+    alice = "alice_client_12345"
+    bob = "bob_client_67890"
+    service.save_draft({"draft": {"card": {"name": "Alice 草稿"}}, "saveAs": False}, client_id=alice)
+    service.save_draft({"draft": {"card": {"name": "Bob 草稿"}}, "saveAs": False}, client_id=bob)
+
+    alice_list = service.list_drafts(client_id=alice)
+    bob_list = service.list_drafts(client_id=bob)
+    assert alice_list["success"] is True
+    assert bob_list["success"] is True
+    assert len(alice_list["data"]) == 1
+    assert len(bob_list["data"]) == 1
+    assert alice_list["data"][0]["name"] == "Alice 草稿"
+    assert bob_list["data"][0]["name"] == "Bob 草稿"
+
+    cleared = service.clear_all_data(client_id=alice)
+    assert cleared["success"] is True
+    assert service.list_drafts(client_id=alice)["data"] == []
+    assert len(service.list_drafts(client_id=bob)["data"]) == 1
+
+
 def test_generate_card_from_story_multiple_characters_and_locations(tmp_path):
     service = RolePlayCardService(str(tmp_path))
 
@@ -560,6 +582,133 @@ def test_generate_card_from_story_fallback_plot_progression_when_missing(tmp_pat
     assert draft["timeline"]["nodes"][0]["parentId"] == ""
     assert draft["timeline"]["nodes"][1]["parentId"] == draft["timeline"]["nodes"][0]["id"]
     assert draft["timeline"]["nodes"][2]["parentId"] == draft["timeline"]["nodes"][1]["id"]
+    assert dummy_provider.calls == 3
+
+
+def test_generate_card_from_story_segment_mode_enriches_character_details(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+
+    class DummyTextProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def validate(self, config):
+            return True, "ok"
+
+        def generate(self, config, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                assert "长篇分段增量提取" in prompt
+                return json.dumps(
+                    {
+                        "storySummary": "林夏和顾沉在雨夜调查旧案。",
+                        "card": {"name": "分段补全测试", "description": "测试首段补全角色详情"},
+                        "characters": [
+                            {"name": "林夏", "age": "22", "hints": "调查记者", "triggerKeywords": ["林夏", "记者"]},
+                            {"name": "顾沉", "age": "27", "hints": "重案组刑警", "triggerKeywords": ["顾沉", "刑警"]},
+                        ],
+                        "openings": [
+                            {
+                                "title": "雨夜接触",
+                                "greeting": "你终于来了。",
+                                "scenario": "暴雨夜的旧城区路口",
+                                "exampleDialogue": "林夏：线索在仓库。\n顾沉：先确认撤离路线。",
+                                "firstMessage": "雨幕里我把档案袋塞进你怀里，示意你跟上。",
+                            }
+                        ],
+                        "locations": [
+                            {"title": "旧城区仓库", "keywords": ["仓库"], "content": "夜间可疑车辆频繁出现。"}
+                        ],
+                        "plotProgression": {
+                            "nodes": [
+                                {
+                                    "id": "n1",
+                                    "title": "雨夜碰头",
+                                    "timePoint": "今夜",
+                                    "trigger": "玩家抵达路口",
+                                    "event": "双方交换旧案线索",
+                                    "objective": "确定调查方向",
+                                    "conflict": "信息来源不一致",
+                                    "outcome": "决定先查仓库",
+                                    "nextHook": "仓库暗门",
+                                },
+                                {
+                                    "id": "n2",
+                                    "title": "仓库潜入",
+                                    "parentId": "n1",
+                                    "timePoint": "今夜稍后",
+                                    "trigger": "找到暗门入口",
+                                    "event": "进入仓库内部侦察",
+                                    "objective": "确认交易证据",
+                                    "conflict": "巡逻加强",
+                                    "outcome": "拍到关键照片",
+                                    "nextHook": "档案馆线索",
+                                },
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            if self.calls == 2:
+                assert "目标角色：林夏" in prompt
+                return json.dumps(
+                    {
+                        "name": "林夏",
+                        "age": "22",
+                        "triggerKeywords": ["林夏", "记者", "调查员"],
+                        "appearance": "黑短发，防水短外套，肩背相机包",
+                        "personality": "行动迅速，警惕性高",
+                        "speakingStyle": "节奏快，句子短",
+                        "speakingExample": "{{user}}: 先去哪？\n林夏: 先仓库，错过今晚就没线索了。",
+                        "background": "城市调查记者，长期追查旧案。",
+                    },
+                    ensure_ascii=False,
+                )
+            if self.calls == 3:
+                assert "目标角色：顾沉" in prompt
+                return json.dumps(
+                    {
+                        "name": "顾沉",
+                        "age": "27",
+                        "triggerKeywords": ["顾沉", "刑警", "证据链"],
+                        "appearance": "高个风衣，神情冷静，左手常握记录本",
+                        "personality": "克制理性，重视证据",
+                        "speakingStyle": "语速稳，逻辑清晰",
+                        "speakingExample": "{{user}}: 现在收网吗？\n顾沉: 不，证据还差最后一环。",
+                        "background": "重案组刑警，负责旧案复核。",
+                    },
+                    ensure_ascii=False,
+                )
+            raise AssertionError("unexpected extra provider.generate call")
+
+        def list_models(self, config):
+            return ["dummy-model"]
+
+    dummy_provider = DummyTextProvider()
+    service.providers.text_providers["openai_compatible"] = dummy_provider
+    payload = {
+        "draft": {"card": {"name": ""}},
+        "storyText": "分段文本：雨夜调查旧案。",
+        "segmentMode": True,
+        "settings": {
+            "textProvider": {
+                "provider": "openai_compatible",
+                "baseUrl": "https://example.com/v1",
+                "apiKey": "test-key",
+                "model": "dummy-model",
+            }
+        },
+    }
+    result = service.generate_card_from_story(payload)
+    assert result["success"] is True
+    draft = result["data"]["draft"]
+    assert len(draft["characters"]) == 2
+    lin_xia = next(item for item in draft["characters"] if item["name"] == "林夏")
+    gu_chen = next(item for item in draft["characters"] if item["name"] == "顾沉")
+    assert lin_xia["appearance"].strip()
+    assert lin_xia["speakingStyle"].strip()
+    assert gu_chen["appearance"].strip()
+    assert gu_chen["speakingExample"].strip()
     assert dummy_provider.calls == 3
 
 
@@ -1273,6 +1422,28 @@ def test_merge_segment_generated_draft_update_existing_policy(tmp_path):
     assert report["ignoredConflictCount"] == 0
 
 
+def test_merge_segment_generated_draft_promotes_named_character_and_sets_card_name(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+    base_draft = service.save_draft({"draft": {"card": {"name": ""}}, "saveAs": False})["data"]
+    incoming_draft = {
+        "card": {"name": "", "description": "补充描述"},
+        "characters": [
+            {
+                "name": "林夏",
+                "triggerKeywords": ["林夏", "记者"],
+                "appearance": "黑色短外套",
+                "background": "城市调查记者",
+            }
+        ],
+        "timeline": {"nodes": []},
+    }
+
+    merged, _report = service._merge_segment_generated_draft(base_draft, incoming_draft, segment_index=0)
+    assert merged["characters"]
+    assert merged["characters"][0]["name"] == "林夏"
+    assert merged["card"]["name"] == "林夏"
+
+
 def test_merge_segment_generated_draft_dedup_character_alias_and_timeline(tmp_path):
     service = RolePlayCardService(str(tmp_path))
     base_draft = {
@@ -1569,3 +1740,99 @@ def test_story_segment_api_flow_preview_then_incremental_updates(tmp_path):
     late = next(item for item in timeline_nodes if item.get("title") == "后段节点")
     assert mid["parentId"] == opening["id"]
     assert late["parentId"] == mid["id"]
+
+
+def test_settings_endpoints_are_stateless_in_web_mode(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+    payload = {
+        "textProvider": {
+            "provider": "openai_compatible",
+            "baseUrl": "https://example.com/v1",
+            "apiKey": "abc",
+            "model": "text-model",
+        },
+        "imageProvider": {
+            "provider": "openai_compatible",
+            "baseUrl": "https://img.example.com/v1",
+            "apiKey": "img-key",
+            "model": "image-model",
+        },
+    }
+    saved = service.save_settings(payload)
+    assert saved["success"] is True
+    assert saved["data"]["textProvider"]["model"] == "text-model"
+    loaded = service.get_settings()
+    assert loaded["success"] is True
+    assert loaded["data"]["textProvider"]["model"] == ""
+    assert loaded["data"]["imageProvider"]["baseUrl"] == "https://api.openai.com/v1"
+
+
+def test_generate_card_from_story_segment_returns_change_set(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+
+    class DummyBridgeJudgeProvider:
+        def validate(self, config):
+            return True, "ok"
+
+        def list_models(self, config):
+            return ["dummy-model"]
+
+        def generate(self, config, prompt):
+            return json.dumps({"decisions": []}, ensure_ascii=False)
+
+    service.providers.text_providers["openai_compatible"] = DummyBridgeJudgeProvider()
+    base_draft = {
+        "card": {"name": "测试卡"},
+        "characters": [{"name": "林夏", "triggerKeywords": ["林夏"]}],
+        "worldBook": {"entries": []},
+        "timeline": {"nodes": []},
+    }
+
+    generated_draft = {
+        "card": {"name": "测试卡"},
+        "characters": [
+            {"name": "林夏", "triggerKeywords": ["林夏", "记者"], "background": "调查记者"},
+            {"name": "顾沉", "triggerKeywords": ["顾沉"], "background": "刑警"},
+        ],
+        "worldBook": {
+            "entries": [
+                {"title": "旧城区仓库", "keywords": ["仓库"], "content": "仓库设定"},
+            ]
+        },
+        "timeline": {"nodes": [{"id": "n1", "title": "开场", "event": "开场事件"}]},
+    }
+
+    def fake_generate_card_from_story(payload):
+        return {
+            "success": True,
+            "error_code": None,
+            "message": "ok",
+            "data": {"draft": generated_draft, "raw": "{}"},
+        }
+
+    service.generate_card_from_story = fake_generate_card_from_story  # type: ignore[method-assign]
+
+    result = service.generate_card_from_story_segment(
+        {
+            "draft": base_draft,
+            "segmentText": "测试分段文本",
+            "segmentIndex": 0,
+            "totalSegments": 1,
+            "settings": {
+                "textProvider": {
+                    "provider": "openai_compatible",
+                    "baseUrl": "https://example.com/v1",
+                    "apiKey": "test-key",
+                    "model": "dummy-model",
+                }
+            },
+        }
+    )
+    assert result["success"] is True
+    data = result["data"]
+    assert isinstance(data, dict)
+    change_set = data.get("changeSet", {})
+    assert "顾沉" in change_set["characters"]["added"]
+    assert "林夏" in change_set["characters"]["updated"]
+    assert "旧城区仓库" in change_set["locations"]["added"]
+    assert "开场" in change_set["timelineNodes"]["added"]

@@ -16,17 +16,17 @@ FIELD_GUIDANCE = {
     "characters.*.speakingStyle": "描述该角色的说话方式、语气和词汇习惯。",
     "characters.*.speakingExample": "写成对话体示例，至少 2 轮，用 `{{user}}:` 与 `角色名:` 的格式。",
     "characters.*.background": "概述成长经历、身份设定与关键事件。",
-    "opening.greeting": "写一句简洁的角色卡开场问候。",
-    "opening.scenario": "概括当前场景，给出时间、地点和氛围。",
-    "opening.exampleDialogue": "提供一段体现角色卡整体风格的示例对话。",
-    "opening.firstMessage": "写成可直接用于 TavernAI 的首条消息。",
-    "openings.*.greeting": "写一句简洁的角色卡开场问候。",
-    "openings.*.scenario": "概括当前场景，给出时间、地点和氛围。",
-    "openings.*.exampleDialogue": "提供一段体现角色卡整体风格的示例对话。",
-    "openings.*.firstMessage": "写成可直接用于 TavernAI 的首条消息。",
+    "opening.greeting": "写 1-2 句开场问候，需点明当前关系或紧迫局势，不要空泛寒暄。",
+    "opening.scenario": "写成可独立阅读的场景设定，明确时间、地点、在场人物、局势和风险（建议 80-180 字）。",
+    "opening.exampleDialogue": "提供一段有推进作用的示例对话，至少 3 轮，体现角色语气、信息差与目标冲突。",
+    "opening.firstMessage": "写成可直接用于 TavernAI 的首条消息，需包含环境描写、角色动作和明确互动钩子（建议 120-260 字）。",
+    "openings.*.greeting": "写 1-2 句开场问候，需点明当前关系或紧迫局势，不要空泛寒暄。",
+    "openings.*.scenario": "写成可独立阅读的场景设定，明确时间、地点、在场人物、局势和风险（建议 80-180 字）。",
+    "openings.*.exampleDialogue": "提供一段有推进作用的示例对话，至少 3 轮，体现角色语气、信息差与目标冲突。",
+    "openings.*.firstMessage": "写成可直接用于 TavernAI 的首条消息，需包含环境描写、角色动作和明确互动钩子（建议 120-260 字）。",
     "worldBook.entries.*.title": "写一个方便检索的世界书条目标题。",
     "worldBook.entries.*.keywords": "给出触发关键词，使用逗号分隔。",
-    "worldBook.entries.*.content": "写成独立可读的设定条目内容，避免依赖上下文代词。",
+    "worldBook.entries.*.content": "写成独立可读且信息充分的地点/设定条目（建议 120-260 字），避免依赖上下文代词，需包含空间结构、关键势力、常见事件与互动风险。",
 }
 
 FIELD_EXAMPLES = {
@@ -96,36 +96,36 @@ FIELD_EXAMPLES = {
         "重案组出身，处理过多起失踪案，对档案系统异常敏感。",
     ],
     "opening.greeting": [
-        "晚上好，你也在查这起案子？",
-        "别紧张，我只是来确认你是否站在同一边。",
+        "晚上好，你来得比预期更早，我们可能只剩十分钟窗口期。",
+        "先别靠近门口，外面有人盯梢；如果你愿意合作，我现在就把底牌给你看。",
     ],
     "opening.scenario": [
-        "深夜港区仓库，雨声很大，路灯忽明忽暗。",
-        "档案馆地下层，旧风机轰鸣，纸页有霉味。",
+        "深夜 01:40，旧港区 7 号仓库后巷。暴雨压低能见度，集装箱间有两组人正在换货。你与我躲在断电配电柜后，随时可能被巡逻手电扫到，一旦暴露就会被迫提前交火。",
+        "凌晨 03:10，中央档案馆地下三层封存区。通风机长期失修，空气里混着机油和霉味。管理员值班室灯还亮着，权限门每五分钟自动轮询，我们必须在下一次轮询前复制关键卷宗。",
     ],
     "opening.exampleDialogue": [
-        "林夏：这份记录被改过。\n顾沉：改过不止一次，手法还不同。",
-        "你：为什么叫我来？\n她：因为你是最后见过受害者的人。",
+        "林夏：交易名单里这三个代号你见过吗？\n你：第二个见过，在旧港货运系统里出现过。\n顾沉：那就对上了，名单和失踪案共用同一条资金链。\n林夏：我们现在分两路，你跟我去仓库里层。",
+        "你：为什么一定要今晚行动？\n她：因为明早档案就会被转移，等天亮就只剩空柜子。\n你：那我们进门后先找什么？\n她：先找编号 K-17 的补录页，那是整条线索的铰链。",
     ],
     "opening.firstMessage": [
-        "雨夜里你推开生锈铁门，我正站在堆满旧木箱的走道尽头，示意你别出声。",
-        "档案灯管闪了两下，你听见身后脚步靠近，我把一份泛黄卷宗塞进你手里。",
+        "你推开生锈铁门时，雨水顺着门缝灌进仓库地面。我半蹲在货架阴影里朝你打手势，另一只手按着对讲机静音键。远处叉车的倒车蜂鸣断断续续，说明有人在清场。你现在有两个选择：跟我从左侧通道潜入，或者留在门口负责盯哨。",
+        "地下层灯管闪烁了两下后恢复常亮，你听见权限门后传来钥匙碰撞声。我把一份泛黄卷宗塞到你手里，纸角还沾着新鲜油墨。若我们在三分钟内核对不出篡改页，值班管理员就会完成轮巡并锁死整层通道。",
     ],
     "openings.*.greeting": [
-        "终于等到你了，我们得马上开始。",
-        "你来得正好，这里有你必须看的东西。",
+        "终于等到你了，情况比汇报里更糟，我们得立刻改计划。",
+        "你来得正好，我手上这份情报刚失效一半，剩下的一半得靠你现场判断。",
     ],
     "openings.*.scenario": [
-        "凌晨地铁终点站，站台几乎空无一人。",
-        "废弃电台天台，冷风夹着潮湿雾气。",
+        "凌晨 04:20，地铁终点站封闭站台。广播系统故障反复播放上一班到站提示，站内只剩巡检灯。我们脚下的检修井盖被人动过，说明有人提前进站布置过撤离路线。",
+        "清晨 05:05，废弃电台天台。海雾压得很低，塔顶红灯每三秒闪一次。对面楼顶偶尔有反光，疑似有人在用长焦镜头观察这里，我们需要边沟通边快速完成设备交接。",
     ],
     "openings.*.exampleDialogue": [
-        "你：我们还要信任他吗？\n她：信任不重要，结果才重要。",
-        "他：你听见了吗？\n你：听见了，不止一个人。",
+        "你：我们还要信任那位线人吗？\n她：信任不重要，关键是他给的时间戳能不能对上。\n你：如果对不上呢？\n她：那就把他当诱饵，反向钓出真正的联络人。",
+        "他：你听见了吗？楼下不是一组脚步。\n你：至少两组，一快一慢，像在包夹。\n他：那我们就不走楼梯，改走维护通道。\n你：你带路，我负责断后。",
     ],
     "openings.*.firstMessage": [
-        "电台塔顶红灯一闪一闪，你刚踏上最后一级台阶，就看见我把对讲机递了过来。",
-        "列车进站风压掀起你的衣角，我从广告灯箱后走出，低声喊了你的名字。",
+        "电台塔顶红灯一闪一闪，你刚踏上最后一级台阶，就看见我把对讲机递过来，手指压在静音键上示意你别急着说话。风把天线拉出细小金属颤音，对面楼顶有可疑反光。你要先确认观察点位置，还是先检查我带来的信号记录？",
+        "列车进站的风压掀起你的衣角，我从广告灯箱后走出，低声喊了你的名字并把一张站内检修图摊开在你面前。图上三条路线里有一条被红笔划掉，表示已经暴露。下一步你决定走快线硬闯，还是走慢线绕行并保留退路？",
     ],
     "worldBook.entries.*.title": [
         "旧城区仓库群",
@@ -136,8 +136,8 @@ FIELD_EXAMPLES = {
         "精灵王庭, 翡翠叶海, 纯血精灵",
     ],
     "worldBook.entries.*.content": [
-        "旧城区仓库群长期闲置，夜间常出现匿名车辆，部分仓库地下有改造痕迹。",
-        "盘踞在丰原腹地的原始森林中心，被参天古木的巨大穹顶包裹。内部由资深高阶术骑与奶骑组成的纯白元老院统领，外围由翡翠禁卫负责守卫。",
+        "旧城区仓库群由 3 条主干巷道和 11 座编号仓组成，白天伪装为低频物流中转，夜间则由匿名车队进行临时换货。7 号与 9 号仓地下有加固隔间和独立排风口，常被用于短时关押或转存高风险物证。外围由两类势力轮值：表面是保安公司，实际由地方走私链条提供武装支援。",
+        "丰原腹地的原始森林中心被古木穹顶覆盖，内部常年潮湿并伴随高浓度自然魔力。核心区由纯白元老院掌控，负责法令、审判和资源配额；外围由翡翠禁卫维持封锁，设置多层巡逻点与魔法结界。外来者最常见风险是方向感失真、通讯中断和身份审查，一旦触发警戒会在十分钟内被多队合围。",
     ],
 }
 
@@ -339,7 +339,8 @@ def build_story_outline_prompt(story_text: str, draft: dict) -> str:
         3. openings 需要对应故事中的“不同重要时间点/阶段”，按时间推进顺序给出多个首屏（若文本存在多个关键节点）。
         4. 必须给出剧情推进结构 plotProgression，用节点化方式拆解主线走向。
         5. 需要给出 storySummary，供后续逐角色生成使用。
-        6. 输出必须是合法 JSON，不要加 markdown，不要解释。
+        6. 由于角色卡使用时不会索引原文，openings / locations / plotProgression 必须写成“脱离原文也能看懂”的自包含内容。
+        7. 输出必须是合法 JSON，不要加 markdown，不要解释。
 
         输出 JSON 结构：
         {{
@@ -359,16 +360,16 @@ def build_story_outline_prompt(story_text: str, draft: dict) -> str:
             {{
               "title": "时间点标题（如：雨夜初遇 / 档案馆对峙）",
               "greeting": "开场白",
-              "scenario": "该时间点的场景（包含时间/地点/局势）",
-              "exampleDialogue": "示例对话",
-              "firstMessage": "首条消息"
+              "scenario": "该时间点的场景（80-180字，包含时间/地点/在场人物/局势与风险）",
+              "exampleDialogue": "示例对话（至少3轮，体现推进）",
+              "firstMessage": "首条消息（120-260字，包含环境+动作+互动钩子）"
             }}
           ],
           "locations": [
             {{
               "title": "地点名",
               "keywords": ["地点关键词1", "地点关键词2"],
-              "content": "地点信息"
+              "content": "地点设定（120-260字，包含空间结构、关键势力、常见事件、互动风险）"
             }}
           ],
           "plotProgression": {{
@@ -378,12 +379,12 @@ def build_story_outline_prompt(story_text: str, draft: dict) -> str:
                 "title": "节点标题",
                 "parentId": "父节点ID，根节点填空字符串",
                 "timePoint": "时间点/阶段",
-                "trigger": "触发条件",
-                "event": "关键事件",
-                "objective": "角色目标",
-                "conflict": "主要冲突或阻碍",
-                "outcome": "节点结果",
-                "nextHook": "下一节点衔接线索"
+                "trigger": "触发条件（30-100字，谁在何时因何触发）",
+                "event": "关键事件（80-220字，写清经过与关键信息）",
+                "objective": "角色目标（30-100字）",
+                "conflict": "主要冲突或阻碍（30-100字）",
+                "outcome": "节点结果（30-120字）",
+                "nextHook": "下一节点衔接线索（30-100字）"
               }}
             ]
           }}
@@ -398,7 +399,8 @@ def build_story_outline_prompt(story_text: str, draft: dict) -> str:
         6. 时间最前的第一个节点必须是根节点（parentId 为空）；时间继续向后时，默认是前一节点的子节点。
         7. 若同一时间点出现多个并行发展节点，则它们都应挂在同一父节点下形成分叉。
         8. 若出现明显时间断层（如“三年前/童年回忆”后切回“当前/今夜/次日”），新阶段节点必须另起根节点（parentId 为空），不要强行续接。
-        9. 节点字段需简洁：title/timePoint 不超过 20 字；trigger/objective/conflict/outcome/nextHook 不超过 40 字；event 不超过 80 字。
+        9. 节点字段要具体且自包含：title/timePoint 可短；trigger/objective/conflict/outcome/nextHook 建议 30-100 字；event 建议 80-220 字。
+        10. 不要写“如上/同前文/见原文”等引用式表达，必须在字段内写全信息。
 
         注意：
         - locations 与 plotProgression 是不同维度：locations 写“地点设定”，plotProgression 写“剧情节点推进”。
@@ -420,7 +422,7 @@ def build_story_outline_prompt_segment(story_text: str, draft: dict) -> str:
 
         关键要求：
         1. 只抽取当前分段文本中出现/明确提及的信息，不要臆造分段外剧情。
-        2. 输出尽量精炼，避免长段落；保证 JSON 完整闭合。
+        2. 输出需自包含且可直接用于角色卡，不要依赖“原文上下文才能理解”；保证 JSON 完整闭合。
         3. 不要 markdown，不要解释，不要额外文字。
 
         输出 JSON 结构：
@@ -441,17 +443,17 @@ def build_story_outline_prompt_segment(story_text: str, draft: dict) -> str:
           "openings": [
             {{
               "title": "时间点标题",
-              "greeting": "可为空",
-              "scenario": "场景摘要",
-              "exampleDialogue": "可为空",
-              "firstMessage": "首条消息"
+              "greeting": "开场白（非空）",
+              "scenario": "场景设定（80-180字，含时间/地点/在场人物/局势与风险）",
+              "exampleDialogue": "示例对话（非空，至少3轮）",
+              "firstMessage": "首条消息（120-260字，含环境+动作+互动钩子）"
             }}
           ],
           "locations": [
             {{
               "title": "地点名",
               "keywords": ["关键词1", "关键词2"],
-              "content": "地点摘要"
+              "content": "地点设定（100-220字，含空间结构、关键势力、常见事件、互动风险）"
             }}
           ],
           "plotProgression": {{
@@ -461,12 +463,12 @@ def build_story_outline_prompt_segment(story_text: str, draft: dict) -> str:
                 "title": "节点标题",
                 "parentId": "",
                 "timePoint": "时间点",
-                "trigger": "触发条件",
-                "event": "关键事件",
-                "objective": "目标",
-                "conflict": "冲突",
-                "outcome": "结果",
-                "nextHook": "后续线索"
+                "trigger": "触发条件（30-100字）",
+                "event": "关键事件（80-220字）",
+                "objective": "目标（30-100字）",
+                "conflict": "冲突（30-100字）",
+                "outcome": "结果（30-120字）",
+                "nextHook": "后续线索（30-100字）"
               }}
             ]
           }}
@@ -477,8 +479,10 @@ def build_story_outline_prompt_segment(story_text: str, draft: dict) -> str:
         - openings 最多 3 个
         - locations 最多 5 个
         - plotProgression.nodes 最多 6 个，最少 2 个
-        - 节点字段简洁：title/timePoint <= 20 字；trigger/objective/conflict/outcome/nextHook <= 36 字；event <= 72 字
+        - 节点字段需具体且自包含：title/timePoint 可短；trigger/objective/conflict/outcome/nextHook 建议 30-100 字；event 建议 80-220 字
         - 若“回忆/三年前”切换到“当前/今夜/次日”等主线阶段，必须另起根节点（parentId 为空）
+        - openings 中每个条目都必须包含非空的 greeting/scenario/exampleDialogue/firstMessage
+        - 不要写“同上/见前文/见原文”等指代式内容
 
         已有草稿上下文（可参考但不受限）：
         {build_context(draft)}
@@ -585,14 +589,15 @@ def build_plot_progression_prompt(
 
         约束：
         1. 至少输出 3 个节点，按时间推进顺序排列。
-        2. 节点内容必须可用于引导剧情，不要空洞描述。
+        2. 节点内容必须可用于引导剧情，写清人物、地点、事件因果与推进结果，不要空洞描述。
         3. timePoint 要与首屏重要时间点保持一致或可映射。
         4. 允许树结构分支：主线节点 parentId 为空，分支节点 parentId 指向父节点 id。
         5. 每个节点必须给出唯一 id。
         6. 时间最前的第一个节点必须是根节点；后续时间点默认接在前一节点下。
         7. 同一时间点的并行节点要挂在同一父节点下，表示“同时发展”的分叉。
         8. 若时间从“多年以前/三年前/童年回忆”等明显跳到“当前/此刻/今夜/次日”，应开启新主线根节点（parentId 为空）。
-        9. 节点字段务必短句化：title/timePoint <= 20 字；trigger/objective/conflict/outcome/nextHook <= 40 字；event <= 80 字。
+        9. 节点字段要自包含且信息充分：title/timePoint 可短；trigger/objective/conflict/outcome/nextHook 建议 30-100 字；event 建议 80-220 字。
+        10. 禁止“如上/同前文/见原文”这类引用式表达，节点字段本身必须能独立理解。
 
         已抽取角色：
         {_json_preview(characters, None)}
@@ -668,7 +673,7 @@ def build_timeline_organize_prompt(
         2. 全部 timePoint 采用统一格式：`T±<offset> | <时间描述>`。
         3. 按时间顺序重排节点；明显回忆段可以在前，但切回当前主线时必须另起根节点。
         4. 修复 parentId：禁止环、禁止无效父节点；同一阶段分支要挂在同一父节点下。
-        5. 压缩文本：节点内容简洁可执行，不写长散文。
+        5. 丰富文本：节点内容要具体且自包含，确保脱离原文也可直接用于推进扮演与写作。
 
         输出 JSON 结构：
         {{
@@ -678,14 +683,14 @@ def build_timeline_organize_prompt(
             {{
               "id": "可沿用旧ID，若冲突可重命名",
               "parentId": "父节点ID，根节点为空字符串",
-              "title": "节点标题（<=24字）",
+              "title": "节点标题（建议 <=28字）",
               "timePoint": "T-3Y | 三年前",
-              "trigger": "触发条件（<=48字）",
-              "event": "关键事件（<=96字）",
-              "objective": "角色目标（<=56字）",
-              "conflict": "主要冲突（<=56字）",
-              "outcome": "节点结果（<=56字）",
-              "nextHook": "下一线索（<=48字）"
+              "trigger": "触发条件（建议 30-100字）",
+              "event": "关键事件（建议 80-220字）",
+              "objective": "角色目标（建议 30-100字）",
+              "conflict": "主要冲突（建议 30-100字）",
+              "outcome": "节点结果（建议 30-120字）",
+              "nextHook": "下一线索（建议 30-100字）"
             }}
           ]
         }}

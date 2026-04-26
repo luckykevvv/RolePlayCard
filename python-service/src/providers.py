@@ -139,7 +139,13 @@ def _openai_request_json_once(
         for key, value in extra_headers.items():
             if isinstance(key, str) and isinstance(value, str) and key.strip():
                 headers[key.strip()] = value
-    timeout_seconds = config.get("timeoutMs", 45000) / 1000
+    timeout_raw = config.get("timeoutMs", 45000)
+    try:
+        timeout_ms = float(timeout_raw)
+    except (TypeError, ValueError):
+        timeout_ms = 45000.0
+    timeout_ms = max(1000.0, timeout_ms)
+    timeout_seconds = timeout_ms / 1000.0
     request = urllib.request.Request(
         f"{config['baseUrl'].rstrip('/')}{path}",
         data=body,

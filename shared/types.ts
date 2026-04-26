@@ -1,4 +1,5 @@
 export type ProviderKind = 'openai_compatible';
+export type EditorMode = 'wizard' | 'expert';
 
 export type EntryTriggerMode = 'always' | 'keyword';
 
@@ -123,6 +124,35 @@ export interface StoryGenerationState {
   segmentationMode: 'chapter' | 'hard_buffer';
 }
 
+export interface BatchGenerationState {
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed';
+  currentSegment: number;
+  totalSegments: number;
+  failedSegmentIndex?: number;
+  errorMessage?: string;
+}
+
+export interface SegmentChangeSet {
+  characters: {
+    added: string[];
+    updated: string[];
+  };
+  locations: {
+    added: string[];
+    updated: string[];
+  };
+  timelineNodes: {
+    added: string[];
+    updated: string[];
+  };
+}
+
+export interface WorkflowState {
+  editorMode: EditorMode;
+  wizardStep: 'input' | 'segments' | 'review' | 'export';
+  batchGeneration?: BatchGenerationState;
+}
+
 export interface CharacterDraft {
   id: string;
   version: number;
@@ -139,6 +169,7 @@ export interface CharacterDraft {
   timeline: TimelineInfo;
   illustration: IllustrationInfo;
   storyGenerationState?: StoryGenerationState;
+  workflowState?: WorkflowState;
 }
 
 export interface DraftSummary {
@@ -236,6 +267,7 @@ export interface GenerateCardFromStorySegmentRequest {
 export interface GenerateCardFromStorySegmentResponse {
   draft: CharacterDraft;
   segmentReport: SegmentReport;
+  changeSet?: SegmentChangeSet;
 }
 
 export interface OrganizeTimelineRequest {

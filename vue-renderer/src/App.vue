@@ -1,12 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import ExpertEditor from './components/ExpertEditor.vue';
+import SettingsPanel from './components/SettingsPanel.vue';
+import WizardFlow from './components/WizardFlow.vue';
+import { apiRequest, downloadBase64Png, imageSrcFromPath } from './composables/useApiClient';
+import { useAutosave } from './composables/useAutosave';
+import { useBatchGenerationState } from './composables/useBatchGeneration';
 import type {
   AppSettings,
+  BatchGenerationState,
   BuiltinPrefixPromptListResponse,
   BuiltinPrefixPromptOption,
   CharacterDefinition,
   CharacterDraft,
   DraftSummary,
+  EditorMode,
   ExportCharacterCardResponse,
   GenerateCardFromStorySegmentResponse,
   GenerateCardFromStoryResponse,
@@ -15,19 +23,22 @@ import type {
   OrganizeTimelineResponse,
   OpeningInfo,
   SegmentInfo,
+  SegmentChangeSet,
   SegmentReport,
   StorySegmentsPreviewResponse,
   TimelineInfo,
   TimelineNode,
   ProviderConfig,
-  TaskResult,
   UploadImageResponse,
   WorldBookAdvancedOptions,
   WorldBookEntry,
 } from '../../shared/types.js';
 
-const API_BASE = '/api';
-const SETTINGS_COOKIE_KEY = 'roleplaycard_settings';
+const SETTINGS_STORAGE_KEY = 'roleplaycard_settings_v2';
+const LEGACY_SETTINGS_COOKIE_KEY = 'roleplaycard_settings';
+const CLIENT_ID_STORAGE_KEY = 'roleplaycard_client_id_v1';
+const DEFAULT_PROVIDER_TIMEOUT_MS = 45000;
+const MIN_PROVIDER_TIMEOUT_MS = 1000;
 const DEFAULT_CHAPTER_REGEX =
   '(?imx)^[ \\t]*(第[0-9零〇一二三四五六七八九十百千两]+[章节卷回篇集部幕][^\\n\\r]*|卷[0-9零〇一二三四五六七八九十百千两]+[^\\n\\r]*|幕[0-9零〇一二三四五六七八九十百千两]+[^\\n\\r]*|chapter[ \\t]+[0-9ivxlcdm]+[^\\n\\r]*|volume[ \\t]+[0-9ivxlcdm]+[^\\n\\r]*)[ \\t]*$';
 
@@ -92,64 +103,72 @@ function setCookieValue(name: string, value: string, days = 365) {
   document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; SameSite=Lax`;
 }
 
-function loadSettingsFromCookie(): AppSettings {
+function clearLegacySettingsCookie() {
+  setCookieValue(LEGACY_SETTINGS_COOKIE_KEY, '', 0);
+}
+
+function loadSettingsFromPersistence(): AppSettings {
   const defaults = buildDefaultSettings();
-  const raw = getCookieValue(SETTINGS_COOKIE_KEY);
+  const storageRaw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+  if (storageRaw) {
+    try {
+      const parsed = JSON.parse(storageRaw) as Partial<AppSettings>;
+      return mergeSettings(defaults, parsed);
+    } catch {
+      window.localStorage.removeItem(SETTINGS_STORAGE_KEY);
+    }
+  }
+  const raw = getCookieValue(LEGACY_SETTINGS_COOKIE_KEY);
   if (!raw) return defaults;
   try {
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    return mergeSettings(defaults, parsed);
+    const merged = mergeSettings(defaults, parsed);
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
+    clearLegacySettingsCookie();
+    return merged;
   } catch {
     return defaults;
   }
 }
 
-async function apiRequest<T>(path: string, init?: RequestInit): Promise<TaskResult<T>> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(init?.headers ?? {}),
-    },
-  });
-  let payload: TaskResult<T> | null = null;
-  try {
-    payload = (await response.json()) as TaskResult<T>;
-  } catch {
-    payload = null;
+function saveSettingsToPersistence(value: AppSettings) {
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(clonePlain(value)));
+}
+
+function createClientId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
   }
-  if (payload) return payload;
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now().toString(16)}-${Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString(16)}`;
+}
+
+function loadClientId(): string {
+  const raw = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY)?.trim() ?? '';
+  if (/^[A-Za-z0-9_-]{8,128}$/.test(raw)) {
+    return raw;
+  }
+  const created = createClientId();
+  window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, created);
+  return created;
+}
+
+const CLIENT_ID = loadClientId();
+
+function draftScopedInit(init?: RequestInit): RequestInit {
   return {
-    success: false,
-    error_code: 'invalid_response',
-    message: `HTTP ${response.status}`,
-    data: null,
+    ...(init ?? {}),
+    headers: {
+      ...(init?.headers && typeof init.headers === 'object' && !Array.isArray(init.headers)
+        ? (init.headers as Record<string, string>)
+        : {}),
+      'X-Client-Id': CLIENT_ID,
+    },
   };
-}
-
-function imageSrcFromPath(pathValue: string, seed: number): string {
-  if (!pathValue) return '';
-  if (pathValue.startsWith('data:') || pathValue.startsWith('blob:') || pathValue.startsWith('http')) {
-    return pathValue;
-  }
-  return `${API_BASE}/files/image?path=${encodeURIComponent(pathValue)}&t=${seed}`;
-}
-
-function downloadBase64Png(filename: string, imageBase64: string) {
-  const binary = atob(imageBase64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  const blob = new Blob([bytes], { type: 'image/png' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
 }
 
 const nowIso = () => new Date().toISOString();
@@ -254,11 +273,27 @@ const createTimeline = (): TimelineInfo => ({
 });
 
 type StoryGenerationStateDraft = NonNullable<CharacterDraft['storyGenerationState']>;
+type WorkflowStateDraft = NonNullable<CharacterDraft['workflowState']>;
+type BatchGenerationStateDraft = NonNullable<WorkflowStateDraft['batchGeneration']>;
 
 const createStoryGenerationState = (): StoryGenerationStateDraft => ({
   totalSegments: 0,
   currentSegmentIndex: 0,
   segmentationMode: 'hard_buffer',
+});
+
+const createBatchGenerationState = (): BatchGenerationStateDraft => ({
+  status: 'idle',
+  currentSegment: 0,
+  totalSegments: 0,
+  failedSegmentIndex: undefined,
+  errorMessage: '',
+});
+
+const createWorkflowState = (): WorkflowStateDraft => ({
+  editorMode: 'expert',
+  wizardStep: 'input',
+  batchGeneration: createBatchGenerationState(),
 });
 
 function ensureStoryGenerationState(value: CharacterDraft): CharacterDraft['storyGenerationState'] {
@@ -280,6 +315,52 @@ function ensureStoryGenerationState(value: CharacterDraft): CharacterDraft['stor
     totalSegments,
     currentSegmentIndex: Math.min(currentSegmentIndex, totalSegments),
     segmentationMode,
+  };
+}
+
+function ensureWorkflowState(value: CharacterDraft): CharacterDraft['workflowState'] {
+  const incoming = value.workflowState;
+  if (!incoming || typeof incoming !== 'object') {
+    return createWorkflowState();
+  }
+  const editorMode = incoming.editorMode === 'wizard' || incoming.editorMode === 'expert'
+    ? incoming.editorMode
+    : 'expert';
+  const wizardStep = incoming.wizardStep === 'input'
+    || incoming.wizardStep === 'segments'
+    || incoming.wizardStep === 'review'
+    || incoming.wizardStep === 'export'
+    ? incoming.wizardStep
+    : 'input';
+  const batch = incoming.batchGeneration && typeof incoming.batchGeneration === 'object'
+    ? incoming.batchGeneration
+    : createBatchGenerationState();
+  const status = batch.status === 'idle'
+    || batch.status === 'running'
+    || batch.status === 'paused'
+    || batch.status === 'completed'
+    || batch.status === 'failed'
+    ? batch.status
+    : 'idle';
+  const currentSegment = Number.isFinite(Number(batch.currentSegment))
+    ? Math.max(0, Number(batch.currentSegment))
+    : 0;
+  const totalSegments = Number.isFinite(Number(batch.totalSegments))
+    ? Math.max(0, Number(batch.totalSegments))
+    : 0;
+  const failedSegmentIndex = Number.isFinite(Number(batch.failedSegmentIndex))
+    ? Math.max(0, Number(batch.failedSegmentIndex))
+    : undefined;
+  return {
+    editorMode,
+    wizardStep,
+    batchGeneration: {
+      status,
+      currentSegment: Math.min(currentSegment, totalSegments || currentSegment),
+      totalSegments,
+      failedSegmentIndex,
+      errorMessage: String(batch.errorMessage || ''),
+    },
   };
 }
 
@@ -308,6 +389,15 @@ function inferSourceType(value: CharacterDraft): CharacterDraft['sourceType'] {
     return 'external';
   }
   return 'roleplaycard';
+}
+
+function isBlankOpening(opening: OpeningInfo): boolean {
+  return !(
+    opening.greeting.trim()
+    || opening.scenario.trim()
+    || opening.exampleDialogue.trim()
+    || opening.firstMessage.trim()
+  );
 }
 
 function ensureOpenings(value: CharacterDraft): OpeningInfo[] {
@@ -470,6 +560,7 @@ const createDraft = (): CharacterDraft => ({
     stylePrompt: '',
   },
   storyGenerationState: undefined,
+  workflowState: createWorkflowState(),
 });
 
 const settings = reactive<AppSettings>({
@@ -505,6 +596,12 @@ const storySegments = ref<SegmentInfo[]>([]);
 const storySegmentationMode = ref<'chapter' | 'hard_buffer'>('hard_buffer');
 const currentSegmentIndex = ref(0);
 const latestSegmentReport = ref<SegmentReport | null>(null);
+const pendingSegmentReview = ref<{
+  segmentIndex: number;
+  draft: CharacterDraft;
+  report: SegmentReport;
+  changeSet: SegmentChangeSet | null;
+} | null>(null);
 const selectedCharacterIndex = ref<number | null>(0);
 const selectedOpeningIndex = ref<number | null>(0);
 const selectedWorldEntryIndex = ref<number | null>(0);
@@ -518,6 +615,11 @@ const importInputRef = ref<HTMLInputElement | null>(null);
 const imageInputRef = ref<HTMLInputElement | null>(null);
 const storyTextInputRef = ref<HTMLInputElement | null>(null);
 const previewSeed = ref(Date.now());
+const workflowEditorMode = ref<EditorMode>('expert');
+const workflowWizardStep = ref<'input' | 'segments' | 'review' | 'export'>('input');
+const { state: batchGenerationState, start: startBatchState, pause: pauseBatchState, resume: resumeBatchState, complete: completeBatchState, fail: failBatchState, reset: resetBatchState } = useBatchGenerationState();
+const reviewEachSegment = ref(false);
+const batchLoopRunning = ref(false);
 const imagePreview = computed(
   () =>
     imageSrcFromPath(
@@ -571,6 +673,20 @@ const totalSegments = computed(() => segmentGenerationState.value.totalSegments)
 const allSegmentsCompleted = computed(
   () => totalSegments.value > 0 && completedSegments.value >= totalSegments.value,
 );
+const editorMode = computed<EditorMode>({
+  get: () => workflowEditorMode.value,
+  set: (value) => {
+    workflowEditorMode.value = value;
+    updateWorkflowState();
+  },
+});
+const wizardStep = computed<'input' | 'segments' | 'review' | 'export'>({
+  get: () => workflowWizardStep.value,
+  set: (value) => {
+    workflowWizardStep.value = value;
+    updateWorkflowState();
+  },
+});
 const validationReport = computed(() => {
   const items: string[] = [];
   if (!effectiveCardName.value) items.push('缺少角色卡名称（或至少一个角色名称）');
@@ -707,10 +823,13 @@ function clearTimelineOrganizeProposal() {
   timelineOrganizeProposal.value = null;
 }
 
-let autosaveTimer: number | null = null;
 let saveRequestSeq = 0;
 let ignoreSaveBeforeSeq = 0;
 const clearingData = ref(false);
+const autosave = useAutosave(async () => {
+  if (!autosaveEnabled.value || !autosave.dirty.value) return;
+  await saveDraft(false, 'autosave');
+}, 1200);
 
 function setStatus(message: string, channel: 'general' | 'autosave' = 'general') {
   if (channel === 'autosave') {
@@ -718,6 +837,28 @@ function setStatus(message: string, channel: 'general' | 'autosave' = 'general')
     return;
   }
   generalStatus.value = message;
+}
+
+function syncWorkflowStateFromDraft() {
+  const state = ensureWorkflowState(draft) ?? createWorkflowState();
+  workflowEditorMode.value = state.editorMode;
+  workflowWizardStep.value = state.wizardStep;
+  resetBatchState(state.batchGeneration?.totalSegments ?? 0, state.batchGeneration?.currentSegment ?? 0);
+  Object.assign(batchGenerationState, state.batchGeneration ?? createBatchGenerationState());
+}
+
+function updateWorkflowState() {
+  draft.workflowState = {
+    editorMode: workflowEditorMode.value,
+    wizardStep: workflowWizardStep.value,
+    batchGeneration: {
+      status: batchGenerationState.status,
+      currentSegment: batchGenerationState.currentSegment,
+      totalSegments: batchGenerationState.totalSegments,
+      failedSegmentIndex: batchGenerationState.failedSegmentIndex,
+      errorMessage: batchGenerationState.errorMessage,
+    } satisfies BatchGenerationState,
+  };
 }
 
 function isProviderConfigured(config: ProviderConfig): boolean {
@@ -736,6 +877,27 @@ function normalizeTextPrefixPromptSettings() {
   }
 }
 
+function normalizeProviderTimeoutSettings() {
+  const normalizeTimeout = (value: unknown): number => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return DEFAULT_PROVIDER_TIMEOUT_MS;
+    }
+    return Math.max(MIN_PROVIDER_TIMEOUT_MS, Math.floor(numeric));
+  };
+  settings.textProvider.timeoutMs = normalizeTimeout(settings.textProvider.timeoutMs);
+  settings.imageProvider.timeoutMs = normalizeTimeout(settings.imageProvider.timeoutMs);
+}
+
+function providerTimeoutMs(kind: 'text' | 'image'): number {
+  const source = kind === 'text' ? settings.textProvider.timeoutMs : settings.imageProvider.timeoutMs;
+  const numeric = Number(source);
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_PROVIDER_TIMEOUT_MS;
+  }
+  return Math.max(MIN_PROVIDER_TIMEOUT_MS, Math.floor(numeric));
+}
+
 function normalizeStorySegmentationSettings() {
   if (!settings.storySegmentation || typeof settings.storySegmentation !== 'object') {
     settings.storySegmentation = createStorySegmentationSettings();
@@ -751,6 +913,7 @@ function normalizeStorySegmentationSettings() {
 }
 
 function ensureApiConfigured(kind: 'text' | 'image'): boolean {
+  normalizeProviderTimeoutSettings();
   const target = kind === 'text' ? settings.textProvider : settings.imageProvider;
   if (isProviderConfigured(target)) {
     return true;
@@ -764,34 +927,41 @@ function ensureApiConfigured(kind: 'text' | 'image'): boolean {
 }
 
 async function refreshDraftList() {
-  const result = await apiRequest<DraftSummary[]>('/drafts');
+  const result = await apiRequest<DraftSummary[]>('/drafts', draftScopedInit());
   if (result.success && result.data) {
     drafts.value = result.data;
   }
 }
 
 async function loadSettings() {
-  Object.assign(settings, loadSettingsFromCookie());
+  const defaults = buildDefaultSettings();
+  const persisted = loadSettingsFromPersistence();
+  Object.assign(settings, mergeSettings(defaults, persisted));
+  normalizeProviderTimeoutSettings();
   normalizeTextPrefixPromptSettings();
   normalizeStorySegmentationSettings();
+  saveSettingsToPersistence(settings);
 }
 
-async function saveSettings(message = '设置已保存到浏览器 Cookie') {
-  setCookieValue(SETTINGS_COOKIE_KEY, JSON.stringify(clonePlain(settings)));
+async function saveSettings(message = '设置已保存') {
+  normalizeProviderTimeoutSettings();
+  normalizeTextPrefixPromptSettings();
+  normalizeStorySegmentationSettings();
+  saveSettingsToPersistence(settings);
   setStatus(message);
 }
 
 async function saveTextSettings() {
-  await saveSettings('文本设置已保存到浏览器 Cookie');
+  await saveSettings('文本设置已保存');
 }
 
 async function saveImageSettings() {
-  await saveSettings('图像设置已保存到浏览器 Cookie');
+  await saveSettings('图像设置已保存');
 }
 
 async function saveSegmentationSettings() {
   normalizeStorySegmentationSettings();
-  await saveSettings('分段设置已保存到浏览器 Cookie');
+  await saveSettings('分段设置已保存');
 }
 
 type ProviderTestResponse = { provider: string; detail: string; models: string[] };
@@ -824,6 +994,7 @@ async function testTextSettings() {
   try {
     const result = await apiRequest<ProviderTestResponse>('/settings/text/test', {
       method: 'POST',
+      timeoutMs: providerTimeoutMs('text'),
       body: JSON.stringify({ settings: clonePlain(settings) }),
     });
     if (!result.success || !result.data) {
@@ -850,6 +1021,7 @@ async function testImageSettings() {
   try {
     const result = await apiRequest<ProviderTestResponse>('/settings/image/test', {
       method: 'POST',
+      timeoutMs: providerTimeoutMs('image'),
       body: JSON.stringify({ settings: clonePlain(settings) }),
     });
     if (!result.success || !result.data) {
@@ -880,10 +1052,24 @@ function syncSelectionIndexes() {
   if (selectedCharacterIndex.value !== null) {
     selectedCharacterIndex.value = Math.min(selectedCharacterIndex.value, draft.characters.length - 1);
     selectedCharacterIndex.value = Math.max(0, selectedCharacterIndex.value);
+    const selectedCharacter = draft.characters[selectedCharacterIndex.value];
+    if (selectedCharacter && isBlankCharacter(selectedCharacter)) {
+      const fallbackIndex = draft.characters.findIndex((item) => !isBlankCharacter(item));
+      if (fallbackIndex >= 0) {
+        selectedCharacterIndex.value = fallbackIndex;
+      }
+    }
   }
   if (selectedOpeningIndex.value !== null) {
     selectedOpeningIndex.value = Math.min(selectedOpeningIndex.value, draft.openings.length - 1);
     selectedOpeningIndex.value = Math.max(0, selectedOpeningIndex.value);
+    const selectedOpening = draft.openings[selectedOpeningIndex.value];
+    if (selectedOpening && isBlankOpening(selectedOpening)) {
+      const fallbackIndex = draft.openings.findIndex((item) => !isBlankOpening(item));
+      if (fallbackIndex >= 0) {
+        selectedOpeningIndex.value = fallbackIndex;
+      }
+    }
   }
   if (selectedWorldEntryIndex.value !== null) {
     selectedWorldEntryIndex.value = Math.min(
@@ -901,13 +1087,20 @@ function syncStoryGenerationStateFromDraft() {
   const state = ensureStoryGenerationState(draft);
   if (!state) {
     currentSegmentIndex.value = 0;
+    batchGenerationState.currentSegment = 0;
+    batchGenerationState.totalSegments = storySegments.value.length;
+    updateWorkflowState();
     return;
   }
   storySegmentationMode.value = state.segmentationMode;
   currentSegmentIndex.value = Math.min(state.currentSegmentIndex, Math.max(0, storySegments.value.length - 1));
+  batchGenerationState.currentSegment = state.currentSegmentIndex;
+  batchGenerationState.totalSegments = Math.max(storySegments.value.length, state.totalSegments);
+  updateWorkflowState();
 }
 
 function applyDraftPayload(payload: CharacterDraft) {
+  autosave.beginHydration();
   const normalizedCharacters = (Array.isArray(payload.characters) ? payload.characters : [])
     .map((item) => ({
       ...createCharacter(),
@@ -935,6 +1128,7 @@ function applyDraftPayload(payload: CharacterDraft) {
     characters: normalizedCharacters,
     timeline: ensureTimeline(payload),
     storyGenerationState: ensureStoryGenerationState(payload),
+    workflowState: ensureWorkflowState(payload),
     worldBook: {
       entries: (payload.worldBook?.entries ?? []).filter((entry) => entry.title !== '剧情推进'),
     },
@@ -944,16 +1138,19 @@ function applyDraftPayload(payload: CharacterDraft) {
   clearTimelineOrganizeProposal();
   syncSelectionIndexes();
   syncStoryGenerationStateFromDraft();
+  syncWorkflowStateFromDraft();
+  void nextTick(() => autosave.endHydration());
 }
 
 async function openDraft(draftId: string) {
-  const result = await apiRequest<CharacterDraft>(`/drafts/${encodeURIComponent(draftId)}`);
+  const result = await apiRequest<CharacterDraft>(`/drafts/${encodeURIComponent(draftId)}`, draftScopedInit());
   if (!result.success || !result.data) {
     setStatus(`打开草稿失败: ${result.message}`);
     return;
   }
   storySegments.value = [];
   latestSegmentReport.value = null;
+  pendingSegmentReview.value = null;
   applyDraftPayload(result.data);
   selectedTimelineNodeId.value = result.data.timeline?.nodes?.[0]?.id ?? null;
   setStatus(`已打开草稿 ${result.data.card.name || result.data.id}`);
@@ -968,13 +1165,16 @@ async function saveDraft(saveAs = false, source: 'manual' | 'autosave' = 'manual
     setStatus('自动保存中...', 'autosave');
   }
   const requestSeq = ++saveRequestSeq;
+  updateWorkflowState();
   draft.updatedAt = nowIso();
   const request = clonePlain(draft);
   request.opening = request.openings?.[0] ?? createOpening(0);
   try {
     const result = await apiRequest<CharacterDraft>('/drafts', {
-      method: 'POST',
-      body: JSON.stringify({ draft: request, saveAs }),
+      ...draftScopedInit({
+        method: 'POST',
+        body: JSON.stringify({ draft: request, saveAs }),
+      }),
     });
     if (requestSeq < ignoreSaveBeforeSeq || clearingData.value) {
       return;
@@ -984,6 +1184,7 @@ async function saveDraft(saveAs = false, source: 'manual' | 'autosave' = 'manual
       return;
     }
     applyDraftPayload(result.data);
+    autosave.markSaved();
     await refreshDraftList();
     if (source === 'autosave') {
       setStatus('草稿已自动保存', 'autosave');
@@ -998,19 +1199,18 @@ async function saveDraft(saveAs = false, source: 'manual' | 'autosave' = 'manual
 }
 
 async function clearAllStoredData() {
-  const confirmed = window.confirm('确认清空所有存储数据吗？这会删除所有草稿、导入文件与缓存图片，且无法恢复。');
+  const confirmed = window.confirm('确认清空当前浏览器用户的草稿吗？此操作无法恢复。');
   if (!confirmed) return;
   clearingData.value = true;
   autosaveSaving.value = false;
   ignoreSaveBeforeSeq = saveRequestSeq + 1;
   autosaveEnabled.value = false;
-  if (autosaveTimer) {
-    window.clearTimeout(autosaveTimer);
-    autosaveTimer = null;
-  }
-  setStatus('正在清空所有存储数据...');
+  autosave.cancel();
+  setStatus('正在清空当前用户草稿...');
   const result = await apiRequest<{ removedItems: number }>('/drafts/clear', {
-    method: 'POST',
+    ...draftScopedInit({
+      method: 'POST',
+    }),
   });
   if (!result.success || !result.data) {
     clearingData.value = false;
@@ -1023,7 +1223,8 @@ async function clearAllStoredData() {
   resetSegmentProgressState();
   await refreshDraftList();
   Object.assign(settings, buildDefaultSettings());
-  setCookieValue(SETTINGS_COOKIE_KEY, '', 0);
+  window.localStorage.removeItem(SETTINGS_STORAGE_KEY);
+  clearLegacySettingsCookie();
   previewSeed.value = Date.now();
   selectedCharacterIndex.value = 0;
   selectedOpeningIndex.value = 0;
@@ -1033,18 +1234,14 @@ async function clearAllStoredData() {
     clearingData.value = false;
     autosaveEnabled.value = true;
     autosaveStatus.value = '自动保存待机';
+    autosave.markSaved();
   }, 0);
-  setStatus(`已清空存储数据（删除 ${result.data.removedItems} 项）`);
+  setStatus(`已清空当前用户草稿（删除 ${result.data.removedItems} 项）`);
 }
 
 function queueAutosave() {
-  if (clearingData.value) return;
-  if (autosaveTimer) {
-    window.clearTimeout(autosaveTimer);
-  }
-  autosaveTimer = window.setTimeout(() => {
-    void saveDraft(false, 'autosave');
-  }, 1200);
+  if (clearingData.value || !autosaveEnabled.value) return;
+  autosave.queue();
 }
 
 async function runFieldAI(
@@ -1074,11 +1271,12 @@ async function runFieldAI(
 }
 
 async function requestAIField(field: string, mode: GenerateFieldRequest['mode'], userInput: string): Promise<string | null> {
-  const result = await apiRequest<{ field: string; result: string; promptPreview: string }>('/ai/field', {
-    method: 'POST',
-    body: JSON.stringify({
-      field,
-      mode,
+    const result = await apiRequest<{ field: string; result: string; promptPreview: string }>('/ai/field', {
+      method: 'POST',
+      timeoutMs: providerTimeoutMs('text'),
+      body: JSON.stringify({
+        field,
+        mode,
       userInput,
       draft: clonePlain(draft),
       settings: clonePlain(settings),
@@ -1096,11 +1294,16 @@ function updateStoryGenerationState(
   current: number,
   mode: 'chapter' | 'hard_buffer',
 ) {
+  const normalizedTotal = Math.max(0, total);
+  const normalizedCurrent = Math.max(0, Math.min(current, total));
   draft.storyGenerationState = {
-    totalSegments: Math.max(0, total),
-    currentSegmentIndex: Math.max(0, Math.min(current, total)),
+    totalSegments: normalizedTotal,
+    currentSegmentIndex: normalizedCurrent,
     segmentationMode: mode,
   };
+  batchGenerationState.totalSegments = normalizedTotal;
+  batchGenerationState.currentSegment = normalizedCurrent;
+  updateWorkflowState();
 }
 
 function resetSegmentProgressState() {
@@ -1108,6 +1311,9 @@ function resetSegmentProgressState() {
   storySegments.value = [];
   currentSegmentIndex.value = 0;
   latestSegmentReport.value = null;
+  pendingSegmentReview.value = null;
+  resetBatchState(0, 0);
+  updateWorkflowState();
 }
 
 function segmentTextByInfo(segment: SegmentInfo): string {
@@ -1122,6 +1328,8 @@ function chooseSegment(index: number) {
     return;
   }
   currentSegmentIndex.value = index;
+  batchGenerationState.currentSegment = index;
+  updateWorkflowState();
 }
 
 async function previewStorySegments() {
@@ -1158,6 +1366,9 @@ async function previewStorySegments() {
     );
     currentSegmentIndex.value = restoredIndex;
     updateStoryGenerationState(storySegments.value.length, segmentGenerationState.value.currentSegmentIndex, result.data.segmentationMode);
+    resetBatchState(storySegments.value.length, restoredIndex);
+    pendingSegmentReview.value = null;
+    wizardStep.value = 'segments';
     setStatus(
       `分段预览完成：共 ${storySegments.value.length} 段，切分策略 ${result.data.segmentationMode === 'chapter' ? '章节优先' : '硬切分'}。`,
     );
@@ -1166,27 +1377,30 @@ async function previewStorySegments() {
   }
 }
 
-async function generateStorySegment(index: number) {
-  if (!ensureApiConfigured('text')) return;
+async function generateStorySegment(index: number, options?: { deferApply?: boolean }): Promise<boolean> {
+  if (!ensureApiConfigured('text')) return false;
   if (!storySegments.value.length) {
     setStatus('请先生成分段预览。');
-    return;
+    return false;
   }
   const segment = storySegments.value[index];
   if (!segment) {
     setStatus('当前段不存在，请重新生成分段预览。');
-    return;
+    return false;
   }
   const segmentText = segmentTextByInfo(segment);
   if (!segmentText.trim()) {
     setStatus('当前段文本为空，请检查原文后重试。');
-    return;
+    return false;
   }
   segmentGenerateBusy.value = true;
+  batchGenerationState.currentSegment = index;
+  updateWorkflowState();
   setStatus(`正在增量生成第 ${index + 1} 段...`);
   try {
     const result = await apiRequest<GenerateCardFromStorySegmentResponse>('/ai/card-from-story-segment', {
       method: 'POST',
+      timeoutMs: providerTimeoutMs('text'),
       body: JSON.stringify({
         draft: clonePlain(draft),
         segmentText,
@@ -1197,15 +1411,33 @@ async function generateStorySegment(index: number) {
     });
     if (!result.success || !result.data) {
       setStatus(`分段增量生成失败: ${result.message}`);
-      return;
+      return false;
     }
     latestSegmentReport.value = result.data.segmentReport;
+    const deferApply = Boolean(options?.deferApply);
+    if (deferApply) {
+      pendingSegmentReview.value = {
+        segmentIndex: index,
+        draft: clonePlain(result.data.draft),
+        report: result.data.segmentReport,
+        changeSet: result.data.changeSet ?? null,
+      };
+      wizardStep.value = 'review';
+      pauseBatchState();
+      updateWorkflowState();
+      setStatus(`第 ${index + 1} 段已生成，等待审阅（可应用或跳过）。`);
+      return true;
+    }
+    pendingSegmentReview.value = null;
     applyDraftPayload(result.data.draft);
     const state = ensureStoryGenerationState(result.data.draft) ?? createStoryGenerationState();
+    batchGenerationState.currentSegment = state.currentSegmentIndex;
+    updateWorkflowState();
     currentSegmentIndex.value = Math.min(state.currentSegmentIndex, Math.max(0, storySegments.value.length - 1));
     setStatus(
       `第 ${index + 1} 段增量完成：新增角色 ${result.data.segmentReport.newCharactersCount}，新增地点 ${result.data.segmentReport.newLocationsCount}。`,
     );
+    return true;
   } finally {
     segmentGenerateBusy.value = false;
   }
@@ -1216,7 +1448,7 @@ async function generateCurrentSegment() {
     setStatus('请先生成分段预览。');
     return;
   }
-  await generateStorySegment(currentSegmentIndex.value);
+  await generateStorySegment(currentSegmentIndex.value, { deferApply: editorMode.value === 'wizard' });
 }
 
 async function generateNextSegment() {
@@ -1230,7 +1462,127 @@ async function generateNextSegment() {
   }
   const nextIndex = Math.min(segmentGenerationState.value.currentSegmentIndex, storySegments.value.length - 1);
   currentSegmentIndex.value = nextIndex;
-  await generateStorySegment(nextIndex);
+  await generateStorySegment(nextIndex, { deferApply: editorMode.value === 'wizard' });
+}
+
+function applyPendingSegmentReview() {
+  const pending = pendingSegmentReview.value;
+  if (!pending) {
+    setStatus('当前没有可应用的审阅结果。');
+    return;
+  }
+  latestSegmentReport.value = pending.report;
+  applyDraftPayload(pending.draft);
+  pendingSegmentReview.value = null;
+  wizardStep.value = 'segments';
+  setStatus(`已应用第 ${pending.segmentIndex + 1} 段的合并结果。`);
+}
+
+function skipPendingSegmentReview() {
+  const pending = pendingSegmentReview.value;
+  if (!pending) {
+    setStatus('当前没有可跳过的审阅结果。');
+    return;
+  }
+  const state = ensureStoryGenerationState(pending.draft) ?? createStoryGenerationState();
+  updateStoryGenerationState(
+    storySegments.value.length,
+    state.currentSegmentIndex,
+    state.segmentationMode,
+  );
+  currentSegmentIndex.value = Math.min(state.currentSegmentIndex, Math.max(0, storySegments.value.length - 1));
+  latestSegmentReport.value = pending.report;
+  pendingSegmentReview.value = null;
+  wizardStep.value = 'segments';
+  setStatus(`已跳过第 ${pending.segmentIndex + 1} 段合并，并推进到下一段。`);
+}
+
+async function runBatchGenerationLoop() {
+  if (batchLoopRunning.value) return;
+  batchLoopRunning.value = true;
+  try {
+    while (batchGenerationState.status === 'running') {
+      if (!storySegments.value.length) {
+        completeBatchState();
+        updateWorkflowState();
+        return;
+      }
+      if (pendingSegmentReview.value) {
+        return;
+      }
+      const nextIndex = Math.min(segmentGenerationState.value.currentSegmentIndex, storySegments.value.length - 1);
+      if (nextIndex < 0 || allSegmentsCompleted.value) {
+        completeBatchState();
+        updateWorkflowState();
+        setStatus('批量生成完成，已到最后一段。');
+        return;
+      }
+      currentSegmentIndex.value = nextIndex;
+      const ok = await generateStorySegment(nextIndex, { deferApply: reviewEachSegment.value });
+      if (!ok) {
+        failBatchState(nextIndex, generalStatus.value || '分段生成失败');
+        updateWorkflowState();
+        return;
+      }
+      if (reviewEachSegment.value) {
+        pauseBatchState();
+        updateWorkflowState();
+        return;
+      }
+      const generatedState = ensureStoryGenerationState(draft) ?? createStoryGenerationState();
+      batchGenerationState.currentSegment = generatedState.currentSegmentIndex;
+      if (generatedState.currentSegmentIndex >= storySegments.value.length) {
+        completeBatchState();
+        updateWorkflowState();
+        setStatus('批量生成完成，已到最后一段。');
+        return;
+      }
+    }
+  } finally {
+    batchLoopRunning.value = false;
+  }
+}
+
+function startBatchGeneration() {
+  if (!storySegments.value.length) {
+    setStatus('请先生成分段预览。');
+    return;
+  }
+  if (allSegmentsCompleted.value) {
+    setStatus('所有分段已生成完成。');
+    return;
+  }
+  const nextIndex = Math.min(segmentGenerationState.value.currentSegmentIndex, storySegments.value.length - 1);
+  startBatchState(storySegments.value.length, nextIndex);
+  wizardStep.value = 'segments';
+  updateWorkflowState();
+  void runBatchGenerationLoop();
+}
+
+function pauseBatchGeneration() {
+  pauseBatchState();
+  updateWorkflowState();
+  setStatus('已暂停批量生成。');
+}
+
+function resumeBatchGeneration() {
+  if (pendingSegmentReview.value) {
+    setStatus('请先处理当前段的变更审阅卡。');
+    return;
+  }
+  resumeBatchState();
+  updateWorkflowState();
+  setStatus('继续批量生成...');
+  void runBatchGenerationLoop();
+}
+
+function retryBatchGeneration() {
+  const failedIndex = batchGenerationState.failedSegmentIndex ?? currentSegmentIndex.value;
+  currentSegmentIndex.value = Math.max(0, failedIndex);
+  startBatchState(storySegments.value.length, currentSegmentIndex.value);
+  updateWorkflowState();
+  setStatus(`重试第 ${currentSegmentIndex.value + 1} 段...`);
+  void runBatchGenerationLoop();
 }
 
 async function generateCardFromInput() {
@@ -1244,6 +1596,7 @@ async function generateCardFromInput() {
   try {
     const result = await apiRequest<GenerateCardFromStoryResponse>('/ai/card-from-story', {
       method: 'POST',
+      timeoutMs: providerTimeoutMs('text'),
       body: JSON.stringify({
         draft: clonePlain(draft),
         storyText: cardGenerateInput.value,
@@ -1262,6 +1615,7 @@ async function generateCardFromInput() {
     const characterCount = result.data.draft.characters.length;
     const locationCount = result.data.draft.worldBook.entries.length;
     resetSegmentProgressState();
+    wizardStep.value = 'export';
     setStatus(`角色卡一键生成完成：角色 ${characterCount} 个，地点条目 ${locationCount} 条。`);
   } finally {
     cardGenerateBusy.value = false;
@@ -1553,6 +1907,7 @@ async function organizeTimelineWithAI() {
   try {
     const result = await apiRequest<OrganizeTimelineResponse>('/ai/timeline/organize', {
       method: 'POST',
+      timeoutMs: providerTimeoutMs('text'),
       body: JSON.stringify({
         draft: clonePlain(draft),
         settings: clonePlain(settings),
@@ -1741,6 +2096,7 @@ async function generateImage() {
   try {
     const result = await apiRequest<{ imagePath: string; prompt: string }>('/ai/image', {
       method: 'POST',
+      timeoutMs: providerTimeoutMs('image'),
       body: JSON.stringify({
         draft: clonePlain(draft),
         prompt: draft.illustration.promptSnapshot,
@@ -1794,6 +2150,7 @@ function resetDraft() {
 watch(
   draft,
   () => {
+    if (autosave.hydrating.value) return;
     if (!autosaveEnabled.value) return;
     queueAutosave();
   },
@@ -1801,6 +2158,8 @@ watch(
 );
 
 onMounted(async () => {
+  autosave.beginHydration();
+  syncWorkflowStateFromDraft();
   await loadSettings();
   await loadBuiltinPrefixPrompts();
   if (!isProviderConfigured(settings.textProvider) || !isProviderConfigured(settings.imageProvider)) {
@@ -1808,13 +2167,15 @@ onMounted(async () => {
     setStatus(message);
     window.alert(message);
   }
-  appDataDir.value = 'Web 模式（设置保存在 Cookie）';
+  appDataDir.value = 'Web 模式（草稿保存在后端应用目录，设置保存在浏览器 localStorage）';
   await refreshDraftList();
   if (drafts.value[0]) {
     await openDraft(drafts.value[0].id);
   } else {
     await saveDraft(false);
   }
+  autosave.markSaved();
+  autosave.endHydration(320);
 });
 </script>
 
@@ -1904,12 +2265,51 @@ onMounted(async () => {
           <p class="muted">数据目录: {{ appDataDir }}</p>
         </div>
         <div class="topbar-actions">
+          <button :class="['nav-button', { active: editorMode === 'wizard' }]" @click="editorMode = 'wizard'">向导模式</button>
+          <button :class="['nav-button', { active: editorMode === 'expert' }]" @click="editorMode = 'expert'">专家模式</button>
           <button @click="saveDraft(false)">立即保存</button>
           <button @click="exportCard" :disabled="!exportReady">导出 TavernAI PNG</button>
         </div>
       </header>
 
-      <section v-if="activeView === 'editor'" class="content-grid">
+      <WizardFlow
+        v-if="activeView === 'editor' && editorMode === 'wizard'"
+        :story-text="cardGenerateInput"
+        :wizard-step="wizardStep"
+        :max-chars-per-segment="maxCharsPerSegment"
+        :chapter-regex="settings.storySegmentation.chapterRegex"
+        :story-segments="storySegments"
+        :current-segment-index="currentSegmentIndex"
+        :completed-segments="completedSegments"
+        :total-segments="totalSegments"
+        :all-segments-completed="allSegmentsCompleted"
+        :story-segmentation-mode="storySegmentationMode"
+        :latest-segment-report="latestSegmentReport"
+        :pending-change-set="pendingSegmentReview?.changeSet ?? null"
+        :pending-segment-index="pendingSegmentReview?.segmentIndex ?? null"
+        :segment-preview-busy="segmentPreviewBusy"
+        :segment-generate-busy="segmentGenerateBusy"
+        :batch-state="batchGenerationState"
+        :review-each-segment="reviewEachSegment"
+        @update-story-text="cardGenerateInput = $event"
+        @update-max-chars="maxCharsPerSegment = $event"
+        @update-chapter-regex="settings.storySegmentation.chapterRegex = $event"
+        @update-wizard-step="wizardStep = $event"
+        @upload-story-text="pickStoryText"
+        @preview-segments="previewStorySegments"
+        @generate-current="generateCurrentSegment"
+        @generate-next="generateNextSegment"
+        @choose-segment="chooseSegment"
+        @start-batch="startBatchGeneration"
+        @pause-batch="pauseBatchGeneration"
+        @resume-batch="resumeBatchGeneration"
+        @retry-batch="retryBatchGeneration"
+        @apply-segment-review="applyPendingSegmentReview"
+        @skip-segment-review="skipPendingSegmentReview"
+        @update-review-each-segment="reviewEachSegment = $event"
+      />
+
+      <ExpertEditor v-else-if="activeView === 'editor'">
         <div class="editor-column">
           <section class="card">
             <div class="panel-header">
@@ -2623,144 +3023,25 @@ onMounted(async () => {
           </section>
 
         </div>
-      </section>
+      </ExpertEditor>
 
-      <section v-else class="settings-layout">
-        <section class="card">
-          <div class="panel-header">
-            <h2>文本 Provider</h2>
-          </div>
-          <div class="field-grid">
-            <label>Provider</label>
-            <select v-model="settings.textProvider.provider" disabled>
-              <option value="openai_compatible">openai_compatible</option>
-            </select>
-            <label>Base URL</label>
-            <input v-model="settings.textProvider.baseUrl" />
-            <label>文本模型</label>
-            <select v-if="textModelOptions.length > 0" v-model="settings.textProvider.model">
-              <option
-                v-for="model in textModelOptions"
-                :key="model"
-                :value="model"
-              >
-                {{ model }}
-              </option>
-            </select>
-            <input v-else v-model="settings.textProvider.model" placeholder="先点连通性测试拉取模型列表" />
-            <label>API Key</label>
-            <input v-model="settings.textProvider.apiKey" type="password" />
-            <label>Temperature</label>
-            <input v-model.number="settings.textProvider.temperature" type="number" step="0.1" />
-            <label>Timeout(ms)</label>
-            <input v-model.number="settings.textProvider.timeoutMs" type="number" />
-            <label>破限提示词来源</label>
-            <select v-model="settings.textProvider.prefixPromptMode">
-              <option value="custom">自定义输入</option>
-              <option value="builtin">内置文件</option>
-            </select>
-          </div>
-          <div v-if="settings.textProvider.prefixPromptMode === 'builtin'" class="field-grid">
-            <label>内置目录</label>
-            <input :value="builtinPrefixPromptDir || '未读取'" readonly />
-            <label>内置模型文件</label>
-            <select v-if="builtinPrefixPromptOptions.length > 0" v-model="settings.textProvider.builtinPrefixPromptModel">
-              <option value="">跟随当前文本模型</option>
-              <option
-                v-for="item in builtinPrefixPromptOptions"
-                :key="item.filename"
-                :value="item.model"
-              >
-                {{ item.model }} ({{ item.filename }})
-              </option>
-            </select>
-            <input v-else value="目录中暂无 .txt 文件" readonly />
-          </div>
-          <div class="field">
-            <label>前置破限提示词</label>
-            <textarea
-              v-model="settings.textProvider.prefixPrompt"
-              rows="5"
-              :placeholder="
-                settings.textProvider.prefixPromptMode === 'builtin'
-                  ? '内置文件未命中时，会回退到这里（可留空）'
-                  : '每次文本调用会自动拼接：前置破限提示词 + 正常提示词'
-              "
-            />
-          </div>
-          <p v-if="settings.textProvider.prefixPromptMode === 'builtin'" class="muted">
-            内置文件按“模型名.txt”匹配；未命中时会回退到上面的自定义文本。
-          </p>
-          <div class="inline-actions">
-            <button @click="loadBuiltinPrefixPrompts" :disabled="loadingBuiltinPrefixPrompts">
-              <span v-if="loadingBuiltinPrefixPrompts" class="loading-spinner loading-inline" />
-              {{ loadingBuiltinPrefixPrompts ? '刷新中...' : '刷新内置列表' }}
-            </button>
-            <button @click="saveTextSettings">保存文本设置</button>
-            <button @click="testTextSettings" :disabled="testingTextProvider">
-              <span v-if="testingTextProvider" class="loading-spinner loading-inline" />
-              {{ testingTextProvider ? '测试中...' : '文本连通性测试' }}
-            </button>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="panel-header">
-            <h2>图像 Provider</h2>
-          </div>
-          <div class="field-grid">
-            <label>Provider</label>
-            <select v-model="settings.imageProvider.provider" disabled>
-              <option value="openai_compatible">openai_compatible</option>
-            </select>
-            <label>Base URL</label>
-            <input v-model="settings.imageProvider.baseUrl" />
-            <label>图像模型</label>
-            <select v-if="imageModelOptions.length > 0" v-model="settings.imageProvider.model">
-              <option
-                v-for="model in imageModelOptions"
-                :key="model"
-                :value="model"
-              >
-                {{ model }}
-              </option>
-            </select>
-            <input v-else v-model="settings.imageProvider.model" placeholder="先点连通性测试拉取模型列表" />
-            <label>API Key</label>
-            <input v-model="settings.imageProvider.apiKey" type="password" />
-            <label>Timeout(ms)</label>
-            <input v-model.number="settings.imageProvider.timeoutMs" type="number" />
-          </div>
-          <div class="inline-actions">
-            <button @click="saveImageSettings">保存图像设置</button>
-            <button @click="testImageSettings" :disabled="testingImageProvider">
-              <span v-if="testingImageProvider" class="loading-spinner loading-inline" />
-              {{ testingImageProvider ? '测试中...' : '图像连通性测试' }}
-            </button>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="panel-header">
-            <h2>长篇分段设置</h2>
-          </div>
-          <div class="field-grid">
-            <label>默认硬切分上限</label>
-            <input v-model.number="settings.storySegmentation.maxCharsPerSegment" type="number" min="500" step="100" />
-          </div>
-          <div class="field">
-            <label>默认章节识别正则</label>
-            <textarea
-              v-model="settings.storySegmentation.chapterRegex"
-              rows="5"
-              placeholder="分段预览时优先用该正则识别章节标题"
-            />
-          </div>
-          <div class="inline-actions">
-            <button @click="saveSegmentationSettings">保存分段设置</button>
-          </div>
-        </section>
-      </section>
+      <SettingsPanel
+        v-else
+        :settings="settings"
+        :text-model-options="textModelOptions"
+        :image-model-options="imageModelOptions"
+        :builtin-prefix-prompt-dir="builtinPrefixPromptDir"
+        :builtin-prefix-prompt-options="builtinPrefixPromptOptions"
+        :loading-builtin-prefix-prompts="loadingBuiltinPrefixPrompts"
+        :testing-text-provider="testingTextProvider"
+        :testing-image-provider="testingImageProvider"
+        @refresh-builtin-prefix-prompts="loadBuiltinPrefixPrompts"
+        @save-text-settings="saveTextSettings"
+        @test-text-settings="testTextSettings"
+        @save-image-settings="saveImageSettings"
+        @test-image-settings="testImageSettings"
+        @save-segmentation-settings="saveSegmentationSettings"
+      />
     </main>
   </div>
 </template>

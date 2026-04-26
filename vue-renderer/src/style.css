@@ -148,6 +148,11 @@ input.checkbox {
   color: var(--text-main);
 }
 
+.topbar-actions .nav-button {
+  width: auto;
+  justify-content: center;
+}
+
 .nav-button.active,
 .primary {
   background: linear-gradient(135deg, rgba(255, 77, 216, 0.42), rgba(78, 249, 255, 0.3));
