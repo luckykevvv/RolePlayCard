@@ -2,6 +2,8 @@
 
 > 根据短篇小说自动生成可游玩角色卡（多角色 + 世界书 + 时间线）。
 
+[Demo地址](https://roleplay.chihaya-anon.uk/)
+
 ## 项目定位
 
 RolePlayCard 是一个面向 TavernAI / SillyTavern 工作流的角色卡工具。  
