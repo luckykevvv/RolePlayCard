@@ -9,7 +9,13 @@
     "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:api\"",
     "dev:web": "npm run dev -w vue-renderer",
     "dev:api": "python python-service/src/server.py --host 127.0.0.1 --port 8765 --app-data .role-play-card-data",
+    "start": "python python-service/src/server.py --host 127.0.0.1 --port 8765 --app-data .role-play-card-data --static-dir vue-renderer/dist",
     "build": "npm run build -w vue-renderer",
+    "pm2:start": "npm run build && pm2 start ecosystem.config.cjs --update-env",
+    "pm2:restart": "npm run build && pm2 restart role-play-card --update-env",
+    "pm2:stop": "pm2 stop role-play-card",
+    "pm2:delete": "pm2 delete role-play-card",
+    "pm2:logs": "pm2 logs role-play-card",
     "typecheck": "npm run typecheck -w vue-renderer",
     "test:python": "python -m pytest python-service/tests",
     "test": "npm run test:python"

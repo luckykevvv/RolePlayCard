@@ -13,6 +13,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from service import RolePlayCardService
+from server import create_app
 
 
 def test_save_and_load_draft(tmp_path):
@@ -1444,6 +1445,145 @@ def test_merge_segment_generated_draft_promotes_named_character_and_sets_card_na
     assert merged["card"]["name"] == "林夏"
 
 
+def test_merge_segment_character_details_uses_llm_fusion_by_default(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+
+    class FusionProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, config, prompt):
+            self.calls += 1
+            assert "不得删除旧设定" in prompt
+            assert "旧背景" in prompt
+            assert "新背景" in prompt
+            return json.dumps(
+                {
+                    "speakingStyle": "旧说话方式，并在第二段后更谨慎",
+                    "speakingExample": "{{user}}: 旧问题\n林夏: 旧回答\n{{user}}: 新问题\n林夏: 新回答",
+                    "background": "旧背景；第 2 段后补充新背景",
+                },
+                ensure_ascii=False,
+            )
+
+    provider = FusionProvider()
+    base_draft = {
+        "characters": [
+            {
+                "name": "林夏",
+                "triggerKeywords": ["林夏"],
+                "speakingStyle": "旧说话方式",
+                "speakingExample": "{{user}}: 旧问题\n林夏: 旧回答",
+                "background": "旧背景",
+            }
+        ],
+        "timeline": {"nodes": []},
+    }
+    incoming_draft = {
+        "characters": [
+            {
+                "name": "林夏",
+                "triggerKeywords": ["林夏"],
+                "speakingStyle": "新说话方式",
+                "speakingExample": "{{user}}: 新问题\n林夏: 新回答",
+                "background": "新背景",
+            }
+        ],
+        "timeline": {"nodes": []},
+    }
+
+    merged, _report = service._merge_segment_generated_draft(
+        base_draft,
+        incoming_draft,
+        segment_index=1,
+        provider=provider,
+        runtime_config={"model": "dummy"},
+    )
+
+    character = merged["characters"][0]
+    assert provider.calls == 1
+    assert "旧背景" in character["background"]
+    assert "新背景" in character["background"]
+    assert "旧问题" in character["speakingExample"]
+    assert "新问题" in character["speakingExample"]
+
+
+def test_merge_segment_character_details_falls_back_to_append_on_bad_llm_json(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+
+    class BadFusionProvider:
+        def generate(self, config, prompt):
+            return "not json"
+
+    base_draft = {
+        "characters": [{"name": "林夏", "triggerKeywords": ["林夏"], "background": "旧背景"}],
+        "timeline": {"nodes": []},
+    }
+    incoming_draft = {
+        "characters": [{"name": "林夏", "triggerKeywords": ["林夏"], "background": "新背景"}],
+        "timeline": {"nodes": []},
+    }
+
+    merged, _report = service._merge_segment_generated_draft(
+        base_draft,
+        incoming_draft,
+        segment_index=2,
+        provider=BadFusionProvider(),
+        runtime_config={"model": "dummy"},
+    )
+
+    assert merged["characters"][0]["background"] == "旧背景\n\n【第 3 段补充】\n新背景"
+
+
+def test_merge_segment_character_details_append_mode_skips_extra_llm(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+
+    class UnexpectedProvider:
+        def generate(self, config, prompt):
+            raise AssertionError("append mode should not call LLM fusion")
+
+    base_draft = {
+        "characters": [{"name": "林夏", "triggerKeywords": ["林夏"], "background": "旧背景"}],
+        "timeline": {"nodes": []},
+    }
+    incoming_draft = {
+        "characters": [{"name": "林夏", "triggerKeywords": ["林夏"], "background": "新背景"}],
+        "timeline": {"nodes": []},
+    }
+
+    merged, _report = service._merge_segment_generated_draft(
+        base_draft,
+        incoming_draft,
+        segment_index=1,
+        character_detail_merge_mode="append",
+        provider=UnexpectedProvider(),
+        runtime_config={"model": "dummy"},
+    )
+
+    assert merged["characters"][0]["background"] == "旧背景\n\n【第 2 段补充】\n新背景"
+
+
+def test_merge_segment_character_details_append_mode_dedupes_identical_text(tmp_path):
+    service = RolePlayCardService(str(tmp_path))
+    base_draft = {
+        "characters": [{"name": "林夏", "triggerKeywords": ["林夏"], "background": "相同背景"}],
+        "timeline": {"nodes": []},
+    }
+    incoming_draft = {
+        "characters": [{"name": "林夏", "triggerKeywords": ["林夏"], "background": "相同背景"}],
+        "timeline": {"nodes": []},
+    }
+
+    merged, _report = service._merge_segment_generated_draft(
+        base_draft,
+        incoming_draft,
+        segment_index=1,
+        character_detail_merge_mode="append",
+    )
+
+    assert merged["characters"][0]["background"] == "相同背景"
+
+
 def test_merge_segment_generated_draft_dedup_character_alias_and_timeline(tmp_path):
     service = RolePlayCardService(str(tmp_path))
     base_draft = {
@@ -1621,6 +1761,7 @@ def test_story_segment_api_flow_preview_then_incremental_updates(tmp_path):
             return ["dummy-model"]
 
         def generate(self, config, prompt):
+            assert "角色卡长篇分段增量合并器" not in prompt
             return json.dumps(
                 {
                     "decisions": [
@@ -1702,7 +1843,7 @@ def test_story_segment_api_flow_preview_then_incremental_updates(tmp_path):
                     "baseUrl": "https://example.com/v1",
                     "apiKey": "test-key",
                     "model": "dummy-model",
-                }
+                },
             },
         }
     )
@@ -1723,7 +1864,10 @@ def test_story_segment_api_flow_preview_then_incremental_updates(tmp_path):
                     "baseUrl": "https://example.com/v1",
                     "apiKey": "test-key",
                     "model": "dummy-model",
-                }
+                },
+                "storySegmentation": {
+                    "characterDetailMergeMode": "append",
+                },
             },
         }
     )
@@ -1732,6 +1876,8 @@ def test_story_segment_api_flow_preview_then_incremental_updates(tmp_path):
     assert second_draft["storyGenerationState"]["currentSegmentIndex"] == 2
     named_characters = [item for item in second_draft["characters"] if item["name"]]
     assert len(named_characters) == 2
+    lin_xia = next(item for item in named_characters if item["name"] == "林夏")
+    assert lin_xia["background"] == "记者\n\n【第 2 段补充】\n新背景"
     assert len(second_draft["worldBook"]["entries"]) == 2
     assert second["data"]["segmentReport"]["newTimelineNodesCount"] == 2
     timeline_nodes = [item for item in second_draft["timeline"]["nodes"] if isinstance(item, dict)]
@@ -1765,6 +1911,33 @@ def test_settings_endpoints_are_stateless_in_web_mode(tmp_path):
     assert loaded["success"] is True
     assert loaded["data"]["textProvider"]["model"] == ""
     assert loaded["data"]["imageProvider"]["baseUrl"] == "https://api.openai.com/v1"
+
+
+def test_server_serves_frontend_static_build(tmp_path):
+    static_dir = tmp_path / "dist"
+    assets_dir = static_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html><body>RolePlayCard</body></html>", encoding="utf-8")
+    (assets_dir / "app.js").write_text("console.log('ok');", encoding="utf-8")
+
+    app = create_app(str(tmp_path / "data"), str(static_dir))
+    client = app.test_client()
+
+    index_response = client.get("/")
+    assert index_response.status_code == 200
+    assert b"RolePlayCard" in index_response.data
+
+    asset_response = client.get("/assets/app.js")
+    assert asset_response.status_code == 200
+    assert b"console.log" in asset_response.data
+
+    spa_response = client.get("/editor/deep-link")
+    assert spa_response.status_code == 200
+    assert b"RolePlayCard" in spa_response.data
+
+    missing_api_response = client.get("/api/missing")
+    assert missing_api_response.status_code == 404
+    assert missing_api_response.json["error_code"] == "not_found"
 
 
 def test_generate_card_from_story_segment_returns_change_set(tmp_path):

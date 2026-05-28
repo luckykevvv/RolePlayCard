@@ -46,6 +46,7 @@ function createStorySegmentationSettings(): AppSettings['storySegmentation'] {
   return {
     chapterRegex: DEFAULT_CHAPTER_REGEX,
     maxCharsPerSegment: 20000,
+    characterDetailMergeMode: 'llm_fuse',
   };
 }
 
@@ -657,6 +658,11 @@ const maxCharsPerSegment = computed({
     settings.storySegmentation.maxCharsPerSegment = normalized;
   },
 });
+const characterDetailMergeModeLabel = computed(() =>
+  settings.storySegmentation.characterDetailMergeMode === 'llm_fuse'
+    ? 'LLM 融合'
+    : '直接追加',
+);
 const segmentGenerationState = computed<StoryGenerationStateDraft>(() => {
   const state = ensureStoryGenerationState(draft);
   if (!state) {
@@ -910,6 +916,9 @@ function normalizeStorySegmentationSettings() {
   settings.storySegmentation.maxCharsPerSegment = Number.isFinite(rawMaxChars)
     ? Math.max(500, Math.floor(rawMaxChars))
     : 20000;
+  if (!['llm_fuse', 'append'].includes(settings.storySegmentation.characterDetailMergeMode)) {
+    settings.storySegmentation.characterDetailMergeMode = 'llm_fuse';
+  }
 }
 
 function ensureApiConfigured(kind: 'text' | 'image'): boolean {
@@ -962,6 +971,10 @@ async function saveImageSettings() {
 async function saveSegmentationSettings() {
   normalizeStorySegmentationSettings();
   await saveSettings('分段设置已保存');
+}
+
+function openSegmentationSettings() {
+  activeView.value = 'settings';
 }
 
 type ProviderTestResponse = { provider: string; detail: string; models: string[] };
@@ -1823,26 +1836,6 @@ function setTimelineNodeParent(nodeId: string, parentId: string) {
   }
 }
 
-function moveTimelineNode(nodeId: string, direction: -1 | 1) {
-  const index = draft.timeline.nodes.findIndex((item) => item.id === nodeId);
-  if (index < 0) return;
-  const subtree = collectTimelineSubtreeNodes(nodeId);
-  const subtreeIds = new Set(subtree.map((item) => item.id));
-  const remaining = draft.timeline.nodes.filter((item) => !subtreeIds.has(item.id));
-  const currentStart = draft.timeline.nodes.findIndex((item) => item.id === subtree[0]?.id);
-  const targetIndexRaw = currentStart + direction;
-  let insertAt = Math.max(0, Math.min(remaining.length, targetIndexRaw));
-  if (direction > 0 && insertAt < remaining.length) {
-    insertAt += 1;
-  }
-  draft.timeline.nodes = [
-    ...remaining.slice(0, insertAt),
-    ...subtree,
-    ...remaining.slice(insertAt),
-  ];
-  clearTimelineOrganizeProposal();
-}
-
 function onTimelineDragStart(nodeId: string, event: DragEvent) {
   timelineDragNodeId.value = nodeId;
   timelineDragOverNodeId.value = null;
@@ -2277,7 +2270,7 @@ onMounted(async () => {
         :story-text="cardGenerateInput"
         :wizard-step="wizardStep"
         :max-chars-per-segment="maxCharsPerSegment"
-        :chapter-regex="settings.storySegmentation.chapterRegex"
+        :character-detail-merge-mode="settings.storySegmentation.characterDetailMergeMode"
         :story-segments="storySegments"
         :current-segment-index="currentSegmentIndex"
         :completed-segments="completedSegments"
@@ -2292,9 +2285,8 @@ onMounted(async () => {
         :batch-state="batchGenerationState"
         :review-each-segment="reviewEachSegment"
         @update-story-text="cardGenerateInput = $event"
-        @update-max-chars="maxCharsPerSegment = $event"
-        @update-chapter-regex="settings.storySegmentation.chapterRegex = $event"
         @update-wizard-step="wizardStep = $event"
+        @open-segmentation-settings="openSegmentationSettings"
         @upload-story-text="pickStoryText"
         @preview-segments="previewStorySegments"
         @generate-current="generateCurrentSegment"
@@ -2338,21 +2330,18 @@ onMounted(async () => {
               </div>
               <div class="field-grid">
                 <label>硬切分上限（字符）</label>
-                <input v-model.number="maxCharsPerSegment" type="number" min="500" step="100" />
+                <input :value="maxCharsPerSegment" readonly />
+                <label>角色长文本合并</label>
+                <input :value="characterDetailMergeModeLabel" readonly />
+                <label>章节识别</label>
+                <input value="使用设置页中的默认正则" readonly />
                 <label>切分策略</label>
                 <input :value="storySegmentationMode === 'chapter' ? 'chapter（章节优先）' : 'hard_buffer（硬切分）'" readonly />
                 <label>当前进度</label>
                 <input :value="`已完成 ${completedSegments} / ${totalSegments}`" readonly />
               </div>
-              <div class="field">
-                <label>章节识别正则（可改）</label>
-                <textarea
-                  v-model="settings.storySegmentation.chapterRegex"
-                  rows="4"
-                  placeholder="默认已包含：第X章/卷/回/篇/集/部/幕、卷X、幕X、Chapter X、Volume X"
-                />
-              </div>
               <div class="inline-actions">
+                <button @click="openSegmentationSettings" :disabled="segmentPreviewBusy || segmentGenerateBusy">分段设置</button>
                 <button @click="previewStorySegments" :disabled="segmentPreviewBusy || segmentGenerateBusy">
                   <span v-if="segmentPreviewBusy" class="loading-spinner loading-inline" />
                   {{ segmentPreviewBusy ? '预览生成中...' : '生成分段预览' }}

@@ -145,6 +145,11 @@ const emit = defineEmits<{
       <div class="field-grid">
         <label>默认硬切分上限</label>
         <input v-model.number="settings.storySegmentation.maxCharsPerSegment" type="number" min="500" step="100" />
+        <label>角色长文本合并</label>
+        <select v-model="settings.storySegmentation.characterDetailMergeMode">
+          <option value="llm_fuse">LLM 融合角色长文本（默认）</option>
+          <option value="append">直接追加角色长文本</option>
+        </select>
       </div>
       <div class="field">
         <label>默认章节识别正则</label>

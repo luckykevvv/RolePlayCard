@@ -18,9 +18,10 @@ from service import RolePlayCardService, fail, ok
 CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
-def create_app(app_data_dir: str) -> Flask:
+def create_app(app_data_dir: str, static_dir: str | None = None) -> Flask:
     service = RolePlayCardService(app_data_dir)
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder=None)
+    frontend_dir = Path(static_dir).resolve() if static_dir else None
 
     def require_client_id() -> tuple[str | None, Any | None]:
         client_id = str(request.headers.get("X-Client-Id", "")).strip()
@@ -152,6 +153,34 @@ def create_app(app_data_dir: str) -> Flask:
     def export_download() -> Any:
         return jsonify(service.export_character_card_download(request.get_json(force=True)))
 
+    @app.get("/")
+    def serve_frontend_index() -> Any:
+        if frontend_dir is None:
+            return jsonify(fail("Frontend static directory is not configured.", "not_found")), 404
+        index_path = frontend_dir / "index.html"
+        if not index_path.is_file():
+            return jsonify(fail("Frontend build not found. Run `npm run build` first.", "not_found")), 404
+        return send_file(index_path)
+
+    @app.get("/<path:asset_path>")
+    def serve_frontend_asset(asset_path: str) -> Any:
+        if asset_path == "favicon.ico":
+            candidate = frontend_dir / asset_path if frontend_dir is not None else None
+            if candidate is not None and candidate.is_file():
+                return send_file(candidate)
+            return ("", 204)
+        if asset_path.startswith("api/"):
+            return jsonify(fail("API endpoint not found.", "not_found")), 404
+        if frontend_dir is None:
+            return jsonify(fail("Frontend static directory is not configured.", "not_found")), 404
+        candidate = (frontend_dir / asset_path).resolve()
+        if frontend_dir in candidate.parents and candidate.is_file():
+            return send_file(candidate)
+        index_path = frontend_dir / "index.html"
+        if index_path.is_file():
+            return send_file(index_path)
+        return jsonify(fail("Frontend build not found. Run `npm run build` first.", "not_found")), 404
+
     @app.errorhandler(Exception)
     def handle_error(error: Exception) -> Any:  # noqa: ANN001
         if isinstance(error, HTTPException):
@@ -166,9 +195,10 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--app-data", default=str(Path.cwd() / ".role-play-card-data"))
+    parser.add_argument("--static-dir", default="")
     args = parser.parse_args()
 
-    app = create_app(args.app_data)
+    app = create_app(args.app_data, args.static_dir or None)
     app.run(host=args.host, port=args.port)
 
 

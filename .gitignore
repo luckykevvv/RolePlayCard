@@ -6,3 +6,12 @@ __pycache__/
 *.pyc
 *.log
 .role-play-card-data/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.coverage
+coverage/
+htmlcov/
+.DS_Store

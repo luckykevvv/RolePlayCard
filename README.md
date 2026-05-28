@@ -74,6 +74,44 @@ npm run typecheck
 npm run test
 ```
 
+### 4) 使用 PM2 托管
+
+PM2 会先构建前端，再用同一个 Python 服务托管前端页面和 API。
+
+```bash
+npm install -g pm2
+python -m pip install -r python-service/requirements.txt
+npm run pm2:start
+```
+
+默认访问：
+
+- 页面: `http://127.0.0.1:8765`
+- 健康检查: `http://127.0.0.1:8765/api/health`
+
+常用管理命令：
+
+```bash
+npm run pm2:logs
+npm run pm2:restart
+npm run pm2:stop
+npm run pm2:delete
+```
+
+如需修改监听地址、端口或数据目录，可在启动前设置环境变量：
+
+PowerShell:
+
+```powershell
+$env:RPC_HOST="0.0.0.0"; $env:RPC_PORT="8765"; $env:RPC_APP_DATA=".role-play-card-data"; npm run pm2:start
+```
+
+Bash:
+
+```bash
+RPC_HOST=0.0.0.0 RPC_PORT=8765 RPC_APP_DATA=.role-play-card-data npm run pm2:start
+```
+
 ## 使用说明（推荐）
 
 1. 打开编辑器顶部的“短篇小说一键生成”。

@@ -49,6 +49,7 @@ def default_story_segmentation_settings() -> dict[str, Any]:
     return {
         "chapterRegex": DEFAULT_CHAPTER_REGEX,
         "maxCharsPerSegment": 20000,
+        "characterDetailMergeMode": "llm_fuse",
     }
 
 

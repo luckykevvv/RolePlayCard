@@ -6,11 +6,11 @@ import type {
   SegmentReport,
 } from '../../../shared/types.js';
 
-const props = defineProps<{
+defineProps<{
   storyText: string;
   wizardStep: 'input' | 'segments' | 'review' | 'export';
   maxCharsPerSegment: number;
-  chapterRegex: string;
+  characterDetailMergeMode: 'llm_fuse' | 'append';
   storySegments: SegmentInfo[];
   currentSegmentIndex: number;
   completedSegments: number;
@@ -28,9 +28,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'update-story-text', value: string): void;
-  (event: 'update-max-chars', value: number): void;
-  (event: 'update-chapter-regex', value: string): void;
   (event: 'update-wizard-step', value: 'input' | 'segments' | 'review' | 'export'): void;
+  (event: 'open-segmentation-settings'): void;
   (event: 'upload-story-text'): void;
   (event: 'preview-segments'): void;
   (event: 'generate-current'): void;
@@ -53,6 +52,8 @@ const stepOrder: Array<{ key: 'input' | 'segments' | 'review' | 'export'; label:
 ];
 
 const summarizeArray = (values: string[]) => (values.length ? values.join('、') : '无');
+const mergeModeLabel = (mode: 'llm_fuse' | 'append') =>
+  mode === 'llm_fuse' ? 'LLM 融合' : '直接追加';
 </script>
 
 <template>
@@ -90,21 +91,14 @@ const summarizeArray = (values: string[]) => (values.length ? values.join('、')
         </div>
         <div class="field-grid">
           <label>硬切分上限</label>
-          <input
-            :value="maxCharsPerSegment"
-            type="number"
-            min="500"
-            step="100"
-            @input="emit('update-max-chars', Number(($event.target as HTMLInputElement).value) || 20000)"
-          />
-          <label>章节识别正则</label>
-          <textarea
-            :value="chapterRegex"
-            rows="3"
-            @input="emit('update-chapter-regex', ($event.target as HTMLTextAreaElement).value)"
-          />
+          <input :value="`${maxCharsPerSegment} 字符`" readonly />
+          <label>角色长文本合并</label>
+          <input :value="mergeModeLabel(characterDetailMergeMode)" readonly />
+          <label>章节识别</label>
+          <input value="使用设置页中的默认正则" readonly />
         </div>
         <div class="inline-actions">
+          <button @click="emit('open-segmentation-settings')" :disabled="segmentPreviewBusy || segmentGenerateBusy">分段设置</button>
           <button @click="emit('upload-story-text')" :disabled="segmentPreviewBusy || segmentGenerateBusy">上传小说 txt</button>
           <button @click="emit('preview-segments')" :disabled="segmentPreviewBusy || segmentGenerateBusy">
             <span v-if="segmentPreviewBusy" class="loading-spinner loading-inline" />

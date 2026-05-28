@@ -162,6 +162,7 @@ PAST_DISTANT_HINTS = (
 )
 PRESENT_HINTS = ("现在", "当前", "此刻", "当下", "眼下", "此时", "今夜", "今晨", "今日", "此夜")
 TIMELINE_TIME_FORMAT_LABEL = "T±<offset> | 时间描述"
+CHARACTER_DETAIL_FIELDS = ("speakingStyle", "speakingExample", "background")
 CHINESE_DIGIT_MAP: dict[str, int] = {
     "零": 0,
     "〇": 0,
@@ -1199,11 +1200,83 @@ class RolePlayCardService:
             if current != new_value:
                 base_card[field] = new_value
 
+    def _append_segment_detail(self, current: str, incoming: str, segment_index: int) -> str:
+        current_text = str(current or "").strip()
+        incoming_text = str(incoming or "").strip()
+        if not incoming_text:
+            return current_text
+        if not current_text:
+            return incoming_text
+        if incoming_text == current_text or incoming_text in current_text:
+            return current_text
+        return f"{current_text}\n\n【第 {segment_index + 1} 段补充】\n{incoming_text}"
+
+    def _build_character_detail_fusion_prompt(
+        self,
+        character_name: str,
+        current_values: dict[str, str],
+        incoming_values: dict[str, str],
+        segment_index: int,
+    ) -> str:
+        return (
+            "你是角色卡长篇分段增量合并器。请融合同一角色的旧设定与新段信息，只返回严格 JSON 对象。\n"
+            "要求：\n"
+            "1. 不得删除旧设定中的重要事实、前因后果和对话风格。\n"
+            "2. 新段内容应作为后续剧情阶段或状态变化吸收进去，形成时间序列；冲突时保留旧事实，并补充后续变化。\n"
+            "3. speakingExample 必须保持对话体，使用 `{{user}}:` 与角色名开头逐行书写。\n"
+            "4. 只输出 speakingStyle、speakingExample、background 三个字段，不要 markdown，不要解释。\n\n"
+            f"角色名：{character_name or '未命名角色'}\n"
+            f"当前处理段：第 {segment_index + 1} 段\n\n"
+            f"旧设定 JSON：\n{json.dumps(current_values, ensure_ascii=False)}\n\n"
+            f"新段信息 JSON：\n{json.dumps(incoming_values, ensure_ascii=False)}\n\n"
+            "输出 JSON 结构：\n"
+            '{"speakingStyle":"融合后的说话方式","speakingExample":"融合后的对话示例","background":"融合后的背景"}'
+        )
+
+    def _fuse_character_detail_fields(
+        self,
+        existing: dict[str, Any],
+        candidate: dict[str, Any],
+        segment_index: int,
+        provider: Any | None,
+        runtime_config: dict[str, Any] | None,
+    ) -> dict[str, str] | None:
+        if provider is None or runtime_config is None:
+            return None
+        current_values = {field: str(existing.get(field, "")).strip() for field in CHARACTER_DETAIL_FIELDS}
+        incoming_values = {field: str(candidate.get(field, "")).strip() for field in CHARACTER_DETAIL_FIELDS}
+        if not any(current_values.values()) or not any(incoming_values.values()):
+            return None
+        prompt = self._build_character_detail_fusion_prompt(
+            str(existing.get("name", "") or candidate.get("name", "")).strip(),
+            current_values,
+            incoming_values,
+            segment_index,
+        )
+        try:
+            raw = provider.generate(runtime_config, prompt)
+        except Exception:
+            return None
+        parsed = _extract_json_object(raw)
+        if not isinstance(parsed, dict):
+            return None
+        fused: dict[str, str] = {}
+        for field in CHARACTER_DETAIL_FIELDS:
+            value = str(parsed.get(field, "")).strip()
+            if not value and (current_values[field] or incoming_values[field]):
+                return None
+            fused[field] = value
+        return fused
+
     def _merge_characters_incremental(
         self,
         base_draft: dict[str, Any],
         incoming_draft: dict[str, Any],
         report: dict[str, int],
+        segment_index: int,
+        character_detail_merge_mode: str = "llm_fuse",
+        provider: Any | None = None,
+        runtime_config: dict[str, Any] | None = None,
     ) -> None:
         base_characters = base_draft.get("characters", [])
         incoming_characters = incoming_draft.get("characters", [])
@@ -1266,10 +1339,22 @@ class RolePlayCardService:
                 existing.get("triggerKeywords", []),
                 candidate.get("triggerKeywords", []),
             )
-            for field in ("age", "appearance", "personality", "speakingStyle", "speakingExample", "background"):
+            for field in ("age", "appearance", "personality"):
                 new_value = str(candidate.get(field, "")).strip()
                 if new_value:
                     existing[field] = new_value
+            if character_detail_merge_mode == "llm_fuse":
+                fused = self._fuse_character_detail_fields(existing, candidate, segment_index, provider, runtime_config)
+            else:
+                fused = None
+            for field in CHARACTER_DETAIL_FIELDS:
+                new_value = str(candidate.get(field, "")).strip()
+                if not new_value:
+                    continue
+                if fused is not None:
+                    existing[field] = fused[field]
+                else:
+                    existing[field] = self._append_segment_detail(str(existing.get(field, "")), new_value, segment_index)
 
             refreshed_candidates = _name_alias_candidates(existing.get("name", ""))
             for keyword in _split_keywords(existing.get("triggerKeywords", [])):
@@ -1553,6 +1638,7 @@ class RolePlayCardService:
         base_draft: dict[str, Any],
         incoming_draft: dict[str, Any],
         segment_index: int,
+        character_detail_merge_mode: str = "llm_fuse",
         provider: Any | None = None,
         runtime_config: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, int]]:
@@ -1560,7 +1646,15 @@ class RolePlayCardService:
         incoming = normalize_draft(incoming_draft)
         report = self._new_segment_report()
         self._merge_card_meta_incremental(merged, incoming, report)
-        self._merge_characters_incremental(merged, incoming, report)
+        self._merge_characters_incremental(
+            merged,
+            incoming,
+            report,
+            segment_index,
+            character_detail_merge_mode=character_detail_merge_mode,
+            provider=provider,
+            runtime_config=runtime_config,
+        )
         self._merge_openings_incremental(merged, incoming)
         self._merge_world_entries_incremental(merged, incoming, report)
         self._append_timeline_nodes_incremental(
@@ -1847,11 +1941,20 @@ class RolePlayCardService:
             return one_shot_result
         data = one_shot_result.get("data", {})
         incoming_draft = normalize_draft(data.get("draft", {}))
+        segmentation_settings = settings.get("storySegmentation", {}) if isinstance(settings, dict) else {}
+        character_detail_merge_mode = str(
+            segmentation_settings.get("characterDetailMergeMode", "llm_fuse")
+            if isinstance(segmentation_settings, dict)
+            else "llm_fuse"
+        ).strip()
+        if character_detail_merge_mode not in {"llm_fuse", "append"}:
+            character_detail_merge_mode = "llm_fuse"
 
         merged_draft, report = self._merge_segment_generated_draft(
             base_draft,
             incoming_draft,
             segment_index,
+            character_detail_merge_mode=character_detail_merge_mode,
             provider=provider,
             runtime_config=runtime_config,
         )

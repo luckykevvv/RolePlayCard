@@ -29,6 +29,7 @@ export interface ProviderConfig {
 export interface StorySegmentationSettings {
   chapterRegex: string;
   maxCharsPerSegment: number;
+  characterDetailMergeMode: 'llm_fuse' | 'append';
 }
 
 export interface AppSettings {
