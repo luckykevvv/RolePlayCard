@@ -64,8 +64,22 @@ npm run dev
 
 默认会同时启动：
 
-- Web 前端（Vite）
-- Python API（`127.0.0.1:8765`）
+- Web 前端（Vite）: `http://127.0.0.1:5173`
+- Python API: `http://127.0.0.1:8765`
+
+如需修改端口、监听地址或数据目录，复制 `.env.example` 为 `.env` 后修改：
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+`.env` 会覆盖同名系统环境变量；不要提交 `.env`。
 
 ### 3) 常用命令
 
@@ -76,10 +90,11 @@ npm run test
 
 ### 4) 使用 PM2 托管
 
-PM2 会先构建前端，再用同一个 Python 服务托管前端页面和 API。
+PM2 会先构建前端，再用同一个 Python 服务托管前端页面和 API。业务运行配置统一来自 `.env`，`ecosystem.config.js` 只定义 PM2 进程。
 
 ```bash
 npm install -g pm2
+npm install
 python -m pip install -r python-service/requirements.txt
 npm run pm2:start
 ```
@@ -98,19 +113,7 @@ npm run pm2:stop
 npm run pm2:delete
 ```
 
-如需修改监听地址、端口或数据目录，可在启动前设置环境变量：
-
-PowerShell:
-
-```powershell
-$env:RPC_HOST="0.0.0.0"; $env:RPC_PORT="8765"; $env:RPC_APP_DATA=".role-play-card-data"; npm run pm2:start
-```
-
-Bash:
-
-```bash
-RPC_HOST=0.0.0.0 RPC_PORT=8765 RPC_APP_DATA=.role-play-card-data npm run pm2:start
-```
+如需修改监听地址、端口或数据目录，编辑 `.env` 中的 `HOST`、`PORT`、`DATA_DIR`、`STATIC_DIR`，然后执行 `npm run pm2:restart`。
 
 ## 使用说明（推荐）
 

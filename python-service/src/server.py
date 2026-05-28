@@ -13,6 +13,7 @@ CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
+from runtime_config import ROOT_DIR, env_int, env_value
 from service import RolePlayCardService, fail, ok
 
 CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
@@ -192,10 +193,13 @@ def create_app(app_data_dir: str, static_dir: str | None = None) -> Flask:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--app-data", default=str(Path.cwd() / ".role-play-card-data"))
-    parser.add_argument("--static-dir", default="")
+    parser.add_argument("--host", default=env_value("HOST", "BIND_HOST", "RPC_HOST", default="127.0.0.1"))
+    parser.add_argument("--port", type=int, default=env_int("PORT", "RPC_PORT", default=8765))
+    parser.add_argument(
+        "--app-data",
+        default=env_value("DATA_DIR", "RPC_APP_DATA", default=str(ROOT_DIR / ".role-play-card-data")),
+    )
+    parser.add_argument("--static-dir", default=env_value("STATIC_DIR", "RPC_STATIC_DIR", default=""))
     args = parser.parse_args()
 
     app = create_app(args.app_data, args.static_dir or None)
