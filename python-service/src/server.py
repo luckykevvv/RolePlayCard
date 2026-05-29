@@ -193,8 +193,8 @@ def create_app(app_data_dir: str, static_dir: str | None = None) -> Flask:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default=env_value("HOST", "BIND_HOST", "RPC_HOST", default="127.0.0.1"))
-    parser.add_argument("--port", type=int, default=env_int("PORT", "RPC_PORT", default=8765))
+    parser.add_argument("--host", default=env_value("API_HOST", "HOST", "BIND_HOST", "RPC_HOST", default="127.0.0.1"))
+    parser.add_argument("--port", type=int, default=env_int("API_PORT", "PORT", "RPC_PORT", default=8766))
     parser.add_argument(
         "--app-data",
         default=env_value("DATA_DIR", "RPC_APP_DATA", default=str(ROOT_DIR / ".role-play-card-data")),

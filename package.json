@@ -9,7 +9,7 @@
     "esbuild@0.25.12": true
   },
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:api\"",
+    "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
     "dev:web": "npm run dev -w vue-renderer",
     "dev:api": "python python-service/src/server.py",
     "start": "python python-service/src/pm2_server.py",

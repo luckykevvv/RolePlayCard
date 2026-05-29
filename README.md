@@ -76,8 +76,8 @@ npm run dev
 
 默认会同时启动：
 
-- Web 前端（Vite）: `http://127.0.0.1:5173`
-- Python API: `http://127.0.0.1:8765`
+- 应用入口（Vite）: `http://127.0.0.1:8765`
+- Python API（由 Vite 代理）: `http://127.0.0.1:8766`
 
 如需修改端口、监听地址或数据目录，复制 `.env.example` 为 `.env` 后修改：
 
@@ -92,6 +92,13 @@ Copy-Item .env.example .env
 ```
 
 `.env` 会覆盖同名系统环境变量；不要提交 `.env`。
+
+局域网访问时只需要把 `.env` 中的 `APP_HOST` 改为 `0.0.0.0`，开发和 PM2 生产都访问同一个端口：
+
+```env
+APP_HOST=0.0.0.0
+APP_PORT=8765
+```
 
 ### 3) 常用命令
 
@@ -125,7 +132,7 @@ npm run pm2:stop
 npm run pm2:delete
 ```
 
-如需修改监听地址、端口或数据目录，编辑 `.env` 中的 `HOST`、`PORT`、`DATA_DIR`、`STATIC_DIR`，然后执行 `npm run pm2:restart`。
+如需修改监听地址、端口或数据目录，编辑 `.env` 中的 `APP_HOST`、`APP_PORT`、`DATA_DIR`、`STATIC_DIR`，然后执行 `npm run pm2:restart`。
 
 ## 使用说明（推荐）
 
