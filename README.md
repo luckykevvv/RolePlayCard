@@ -56,6 +56,18 @@ npm install
 python -m pip install -r python-service/requirements.txt
 ```
 
+若 npm 提示 `allow-scripts`，项目已在 `package.json` 中批准当前锁定的 `esbuild` 安装脚本版本。升级依赖后如出现新的待审核版本，先查看：
+
+```bash
+npm approve-scripts --allow-scripts-pending
+```
+
+确认来源后再批准：
+
+```bash
+npm approve-scripts esbuild
+```
+
 ### 2) 启动开发环境
 
 ```bash

@@ -5,6 +5,9 @@
   "workspaces": [
     "vue-renderer"
   ],
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:api\"",
     "dev:web": "npm run dev -w vue-renderer",
